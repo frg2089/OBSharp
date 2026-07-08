@@ -1,0 +1,14 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PublishAot>true</PublishAot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NetObsBindings" />
+    <PackageReference Include="Shimakaze.HostFxr" />
+    <PackageReference Include="Shimakaze.NetHost" />
+  </ItemGroup>
+
+</Project>

@@ -1,8 +1,13 @@
-<Project>
+﻿<Project>
   <PropertyGroup>
     <!-- Enable central package management, https://learn.microsoft.com/en-us/nuget/consume-packages/Central-Package-Management -->
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
   <ItemGroup>
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.9" />
+    <PackageVersion Include="NetObsBindings" Version="32.0.0" />
+    <PackageVersion Include="Shimakaze.HostFxr" Version="0.0.10" />
+    <PackageVersion Include="Shimakaze.NetHost" Version="0.0.10" />
   </ItemGroup>
 </Project>

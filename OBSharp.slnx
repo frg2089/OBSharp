@@ -9,4 +9,6 @@
     <File Path="LICENSE" />
     <File Path="nuget.config" />
   </Folder>
+  <Project Path="src/OBSharp.Loader/OBSharp.Loader.csproj" />
+  <Project Path="src/OBSharp/OBSharp.csproj" />
 </Solution>
