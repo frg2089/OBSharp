@@ -13,7 +13,7 @@ public static class OBSModule
     private static unsafe obs_module* s_obs_module_pointer;
     private static readonly IServiceProvider ServiceProvider;
     private static readonly ILogger Logger;
-    public const string Name = "OBSharp";
+    public const string Name = "OB#";
     public const string Description = "通过 CoreCLR 运行插件";
 
     static OBSModule()
