@@ -67,9 +67,7 @@ internal sealed partial class OBSLogger(string categoryName) : ILogger
 
         string text = $"[OBSharp] {level,-5} {categoryName,-16}: {message}";
         Debug.WriteLine(text);
-        nint msg = Marshal.StringToCoTaskMemUTF8(text);
-        blog(log_level, msg);
-        Marshal.FreeCoTaskMem(msg);
+        blog(log_level, text);
     }
 
     private sealed class Scope(object state, Scope? parent) : IDisposable
@@ -83,7 +81,7 @@ internal sealed partial class OBSLogger(string categoryName) : ILogger
         }
     }
 
-    [LibraryImport("obs")]
+    [LibraryImport("obs", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
-    private static partial void blog(int log_level, nint format);
+    private static partial void blog(int log_level, string format);
 }

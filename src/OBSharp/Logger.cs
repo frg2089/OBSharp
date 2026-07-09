@@ -14,14 +14,9 @@ public static partial class Logger
     public static void Warn(string text) => Log(LOG_WARNING, text);
     public static void Error(string text) => Log(LOG_ERROR, text);
 
-    private static void Log(int log_level, string text)
-    {
-        nint msg = Marshal.StringToCoTaskMemUTF8($"[OBSharp.Loader]: {text}");
-        blog(log_level, msg);
-        Marshal.FreeCoTaskMem(msg);
-    }
+    private static void Log(int log_level, string text) => blog(log_level, $"[OBSharp.Loader]: {text}");
 
-    [LibraryImport("obs")]
+    [LibraryImport("obs", StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
-    private static partial void blog(int log_level, nint format);
+    private static partial void blog(int log_level, string format);
 }
