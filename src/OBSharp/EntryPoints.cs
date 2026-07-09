@@ -93,36 +93,51 @@ public static unsafe partial class EntryPoints
             string asm = Path.Combine(binAny, AssemblyFileName);
             Logger.Debug($"OBSharp Managed Path: {asm}");
 
-            string runtimeconfigTemplate = Path.Combine(dataPath, RuntimeConfigFileName);
-            RuntimeConfig? runtimeConfig = null;
-            if (File.Exists(runtimeconfigTemplate))
+            Logger.Info($"Using NETCore framework.");
+            List<Framework> frameworks = new(3)
             {
-                using var fs = File.OpenRead(runtimeconfigTemplate);
+                NETCore
+            };
+
+            string appsettings = Path.Combine(dataPath, "appsettings.json");
+            if (File.Exists(appsettings))
+            {
+                Logger.Debug($"Loading appsettings.json from {appsettings}");
+                using var fs = File.OpenRead(appsettings);
+                var appconfig = JsonSerializer.Deserialize(fs, SourceGenerationContext.Default.AppSettings);
+                if (appconfig?.Runtime.UseWindowsDesktop is true)
+                {
+                    Logger.Info($"Using WindowsDesktop framework.");
+                    frameworks.Add(WindowsDesktop);
+                }
+                if (appconfig?.Runtime.UseAspNet is true)
+                {
+                    Logger.Info($"Using AspNetCore framework.");
+                    frameworks.Add(AspNetCore);
+                }
+            }
+
+            string runtimeconfigTemplatePath = Path.Combine(dataPath, RuntimeConfigFileName);
+            RuntimeConfig? runtimeConfig = null;
+            if (File.Exists(runtimeconfigTemplatePath))
+            {
+                using var fs = File.OpenRead(runtimeconfigTemplatePath);
                 runtimeConfig = JsonSerializer.Deserialize(fs, SourceGenerationContext.Default.RuntimeConfig);
             }
 
             runtimeConfig ??= new();
             runtimeConfig.RuntimeOptions.Tfm = Tfm;
-            runtimeConfig.RuntimeOptions.Frameworks.Add(NETCore);
+            if (frameworks.Count is 1)
+                runtimeConfig.RuntimeOptions.Framework = frameworks[0];
+            else
+                runtimeConfig.RuntimeOptions.Frameworks = frameworks;
 
-            string appsettings = Path.Combine(dataPath, "appsettings.json");
-            if (File.Exists(appsettings))
-            {
-                using var fs = File.OpenRead(appsettings);
-                var appconfig = JsonSerializer.Deserialize(fs, SourceGenerationContext.Default.AppSettings);
-                if (appconfig?.Runtime.UseAspNet is true)
-                    runtimeConfig.RuntimeOptions.Frameworks.Add(AspNetCore);
-                if (appconfig?.Runtime.UseWindowsDesktop is true)
-                    runtimeConfig.RuntimeOptions.Frameworks.Add(WindowsDesktop);
-            }
-
-            string runtimeconfig = Path.GetTempFileName();
+            string runtimeconfigPath = Path.Combine(binAny, RuntimeConfigFileName);
+            using (var fs = File.Create(runtimeconfigPath))
+                JsonSerializer.Serialize(fs, runtimeConfig, SourceGenerationContext.Default.RuntimeConfig);
             try
             {
-                using (var fs = File.Create(runtimeconfig))
-                    JsonSerializer.Serialize(fs, runtimeConfig, SourceGenerationContext.Default.RuntimeConfig);
-
-                Logger.Debug($"CoreCLR Runtime Config Path: {runtimeconfig}");
+                Logger.Debug($"CoreCLR Runtime Config Path: {runtimeconfigPath}");
 
                 string hostfxrPath = NetHost.GetHostFxrPath();
                 Logger.Info($"Found CoreCLR Host Framework at \"{hostfxrPath}\".");
@@ -130,7 +145,7 @@ public static unsafe partial class EntryPoints
                 s_hostFxr = new HostFXR(hostfxrPath);
                 Logger.Debug($"CoreCLR Host Framework loaded!");
 
-                s_hostFxr.InitializeForRuntimeConfig(runtimeconfig, null, out s_context);
+                s_hostFxr.InitializeForRuntimeConfig(runtimeconfigPath, null, out s_context);
 
                 s_context.LoadAssembly(asm);
 
@@ -146,9 +161,11 @@ public static unsafe partial class EntryPoints
 
                 return true;
             }
-            finally
+            catch
             {
-                File.Delete(runtimeconfig);
+                Logger.Error($"runtimeconfig.json: {runtimeconfigPath}");
+                Logger.Error(File.ReadAllText(runtimeconfigPath));
+                throw;
             }
         }
         catch (Exception e)

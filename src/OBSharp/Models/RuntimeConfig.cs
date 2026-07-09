@@ -17,13 +17,16 @@ internal sealed record class RuntimeOptions
     [JsonPropertyName("tfm")]
     public string Tfm { get; set; } = "net10.0";
 
+    [JsonPropertyName("framework")]
+    public Framework? Framework { get; set; }
+
     [JsonPropertyName("frameworks")]
-    public List<Framework> Frameworks { get; set; } = [];
+    public List<Framework>? Frameworks { get; set; }
 
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? AdditionalProperties { get; set; }
 }
 
 internal sealed record class Framework(
-    [property: JsonPropertyName("Type")] string Name,
-    [property: JsonPropertyName("Type")] string Version);
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("version")] string Version);
