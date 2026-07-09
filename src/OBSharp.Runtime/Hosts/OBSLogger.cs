@@ -1,13 +1,16 @@
-﻿using System.Text;
+﻿using System.Runtime.InteropServices;
 
 using Microsoft.Extensions.Logging;
 
-using ObsInterop;
-
 namespace OBSharp.Hosts;
 
-internal sealed class OBSLogger(string categoryName) : ILogger
+internal sealed partial class OBSLogger(string categoryName) : ILogger
 {
+    public const int LOG_ERROR = 100;
+    public const int LOG_WARNING = 200;
+    public const int LOG_INFO = 300;
+    public const int LOG_DEBUG = 400;
+
     private static readonly AsyncLocal<Scope?> CurrentScope = new();
 
     public IDisposable BeginScope<TState>(TState state) where TState : notnull
@@ -29,10 +32,10 @@ internal sealed class OBSLogger(string categoryName) : ILogger
         int log_level = logLevel switch
         {
             LogLevel.Trace => 500,
-            LogLevel.Debug => ObsBase.LOG_DEBUG,
-            LogLevel.Information => ObsBase.LOG_INFO,
-            LogLevel.Warning => ObsBase.LOG_WARNING,
-            LogLevel.Error => ObsBase.LOG_ERROR,
+            LogLevel.Debug => LOG_DEBUG,
+            LogLevel.Information => LOG_INFO,
+            LogLevel.Warning => LOG_WARNING,
+            LogLevel.Error => LOG_ERROR,
             LogLevel.Critical => 50,
             LogLevel.None => -1,
             _ => -1,
@@ -61,9 +64,9 @@ internal sealed class OBSLogger(string categoryName) : ILogger
             scope = scope.Parent;
         }
 
-        byte[] bytes = Encoding.UTF8.GetBytes($"[OBSharp] {level,-5} {categoryName,-16}: {message}");
-        fixed (byte* ptr = bytes)
-            ObsBase.blog(log_level, (sbyte*)ptr);
+        nint msg = Marshal.StringToCoTaskMemUTF8($"[OBSharp] {level,-5} {categoryName,-16}: {message}");
+        blog(log_level, msg);
+        Marshal.FreeCoTaskMem(msg);
     }
 
     private sealed class Scope(object state, Scope? parent) : IDisposable
@@ -76,4 +79,8 @@ internal sealed class OBSLogger(string categoryName) : ILogger
             CurrentScope.Value = Parent;
         }
     }
+
+    [LibraryImport("obs")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    private static partial void blog(int log_level, nint format);
 }

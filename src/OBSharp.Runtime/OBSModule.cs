@@ -1,23 +1,22 @@
 ﻿using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 
 using OBSharp.Hosts;
 
-using ObsInterop;
-
 namespace OBSharp;
 
-public static class OBSModule
+public static partial class OBSModule
 {
     private static OBSModuleHost s_host = default!;
     public const string Name = "OB#";
     public const string Description = "通过 CoreCLR 运行插件";
 
     [UnmanagedCallersOnly]
-    public static unsafe void SetPointer(obs_module* module)
+    public static unsafe void SetPointer(nint module)
     {
-        string? path = Marshal.PtrToStringUTF8((nint)Obs.obs_get_module_data_path(module));
+        string? path = Marshal.PtrToStringUTF8(obs_get_module_data_path(module));
         Debug.Assert(path is not null);
         path = Path.GetFullPath(path);
 
@@ -60,4 +59,8 @@ public static class OBSModule
 
     [UnmanagedCallersOnly]
     public static void FreeLocale() => s_host.FreeLocale();
+
+    [LibraryImport("obs")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    private static partial nint obs_get_module_data_path(nint module);
 }

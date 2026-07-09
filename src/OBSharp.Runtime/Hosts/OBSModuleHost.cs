@@ -6,8 +6,6 @@ using Microsoft.Extensions.Options;
 
 using OBSharp.Plugins;
 
-using ObsInterop;
-
 namespace OBSharp.Hosts;
 
 internal sealed class OBSModuleHostOptions
@@ -24,7 +22,7 @@ internal sealed partial class OBSModuleHost(
     ILogger<OBSModuleHost> logger,
     IEnumerable<ObsPlugin> plugins) : IDataFolderProvider, IRuntimeInfoProvider
 {
-    private unsafe obs_module* _obs_module_pointer;
+    private unsafe nint _obs_module_pointer;
     public OBSModuleHostOptions Options => options.Value;
 
     public bool UseAspNet => Options.UseAspNet;
@@ -32,7 +30,7 @@ internal sealed partial class OBSModuleHost(
 
     public string GetDataFolder(string name) => Path.Combine(Options.ContentPath, name);
 
-    public unsafe void SetPointer(obs_module* module)
+    public unsafe void SetPointer(nint module)
     {
         try
         {

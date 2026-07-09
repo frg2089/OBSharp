@@ -6,13 +6,11 @@ using System.Text.Json;
 
 using OBSharp.Models;
 
-using ObsInterop;
-
 using Shimakaze;
 
 namespace OBSharp;
 
-public static unsafe class EntryPoints
+public static unsafe partial class EntryPoints
 {
     private const string AssemblyFileName = "OBSharp.Runtime.dll";
     private const string RuntimeConfigFileName = "OBSharp.Runtime.runtimeconfig.json";
@@ -20,7 +18,12 @@ public static unsafe class EntryPoints
     private const string Tfm = "net10.0";
     private const string FrameworkVersion = "10.0.0";
 
-    private static obs_module* s_obs_module_pointer;
+    private const int LIBOBS_API_MAJOR_VER = 32;
+    private const int LIBOBS_API_MINOR_VER = 0;
+    private const int LIBOBS_API_PATCH_VER = 0;
+    private const int LIBOBS_API_VER = (LIBOBS_API_MAJOR_VER << 24) | (LIBOBS_API_MINOR_VER << 16) | LIBOBS_API_PATCH_VER;
+
+    private static nint s_obs_module_pointer;
     private static HostFXR? s_hostFxr;
     private static HostFXRHandle? s_context;
 
@@ -65,17 +68,17 @@ public static unsafe class EntryPoints
             if (s_hostFxr is not null && s_context is not null)
                 return true;
 
-            if (s_obs_module_pointer is null)
+            if (s_obs_module_pointer is 0)
                 throw new InvalidOperationException("MUST invoke obs_module_set_pointer first.");
 
             Logger.Info("Initializing CoreCLR ...");
 
-            if (Marshal.PtrToStringUTF8((nint)Obs.obs_get_module_binary_path(s_obs_module_pointer)) is not { Length: not 0 } unmanaged)
+            if (Marshal.PtrToStringUTF8(obs_get_module_binary_path(s_obs_module_pointer)) is not { Length: not 0 } unmanaged)
                 throw new InvalidOperationException("Cannot get current plugin's binary path.");
             unmanaged = Path.GetFullPath(unmanaged);
             Logger.Debug($"OBSharp Unmanaged Path: {unmanaged}");
 
-            if (Marshal.PtrToStringUTF8((nint)Obs.obs_get_module_data_path(s_obs_module_pointer)) is not { Length: not 0 } dataPath)
+            if (Marshal.PtrToStringUTF8(obs_get_module_data_path(s_obs_module_pointer)) is not { Length: not 0 } dataPath)
                 throw new InvalidOperationException("Cannot get current plugin's data path.");
             dataPath = Path.GetFullPath(dataPath);
             Logger.Debug($"OBSharp Data Path: {dataPath}");
@@ -156,7 +159,7 @@ public static unsafe class EntryPoints
     }
 
     [UnmanagedCallersOnly(EntryPoint = "obs_module_set_pointer", CallConvs = new[] { typeof(CallConvCdecl) })]
-    public static void SetPointer(obs_module* module)
+    public static void SetPointer(nint module)
     {
         s_obs_module_pointer = module;
         Logger.Debug("Invoke obs_module_set_pointer.");
@@ -166,17 +169,13 @@ public static unsafe class EntryPoints
         if (s_obs_module_set_pointer is 0)
             return;
 
-        ((delegate* unmanaged<obs_module*, void>)s_obs_module_set_pointer)(module);
+        ((delegate* unmanaged<nint, void>)s_obs_module_set_pointer)(module);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "obs_module_ver", CallConvs = new[] { typeof(CallConvCdecl) })]
     public static uint GetVersion()
     {
-        uint major = (uint)Obs.Version.Major;
-        uint minor = (uint)Obs.Version.Minor;
-        uint patch = (uint)Obs.Version.Build;
-        uint version = (major << 24) | (minor << 16) | patch;
-        return version;
+        return LIBOBS_API_VER;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "obs_module_name", CallConvs = new[] { typeof(CallConvCdecl) })]
@@ -269,4 +268,12 @@ public static unsafe class EntryPoints
 
         ((delegate* unmanaged<void>)s_obs_module_free_locale)();
     }
+
+    [LibraryImport("obs")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    private static partial nint obs_get_module_binary_path(nint module);
+
+    [LibraryImport("obs")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    private static partial nint obs_get_module_data_path(nint module);
 }

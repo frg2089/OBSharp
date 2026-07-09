@@ -6,7 +6,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="NetObsBindings" />
     <PackageReference Include="Shimakaze.HostFxr" />
     <PackageReference Include="Shimakaze.NetHost" />
   </ItemGroup>
