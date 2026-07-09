@@ -2,7 +2,7 @@
 
 using ObsInterop;
 
-namespace OBSharp.Loader;
+namespace OBSharp;
 
 public static class Logger
 {

@@ -1,4 +1,4 @@
-﻿namespace OBSharp.Runtime;
+﻿namespace OBSharp;
 
 public abstract class ObsPlugin
 {

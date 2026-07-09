@@ -7,11 +7,13 @@ using ObsInterop;
 
 using Shimakaze;
 
-namespace OBSharp.Loader;
+namespace OBSharp;
 
 public static unsafe class EntryPoints
 {
-    private const string TypeName = "OBSharp.OBSModule, OBSharp";
+    private const string AssemblyFileName = "OBSharp.Runtime.dll";
+    private const string RuntimeConfigFileName = "OBSharp.Runtime.runtimeconfig.json";
+    private const string TypeName = "OBSharp.OBSModule, OBSharp.Runtime";
 
     private static obs_module* s_obs_module_pointer;
     private static HostFXR? s_hostFxr;
@@ -72,10 +74,10 @@ public static unsafe class EntryPoints
                 throw new DirectoryNotFoundException($"Cannot found the path \"{binArch}\"'s parent.");
 
             string binAny = Path.Combine(binBase, "any");
-            string asm = Path.Combine(binAny, "OBSharp.dll");
+            string asm = Path.Combine(binAny, AssemblyFileName);
             Logger.Debug($"OBSharp Managed Path: {asm}");
 
-            string runtimeconfig = Path.Combine(binAny, "OBSharp.runtimeconfig.json");
+            string runtimeconfig = Path.Combine(binAny, RuntimeConfigFileName);
             Logger.Debug($"CoreCLR Runtime Config Path: {runtimeconfig}");
 
             string hostfxrPath = NetHost.GetHostFxrPath();

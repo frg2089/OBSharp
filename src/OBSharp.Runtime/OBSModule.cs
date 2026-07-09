@@ -27,7 +27,7 @@ public static class OBSModule
         Debug.Assert(path is not null);
         path = Path.GetFullPath(path);
 
-        OBSModuleHostBuilder builder = new();
+        OBSModuleHostBuilder builder = new(path);
 
         s_host = builder.Build();
 

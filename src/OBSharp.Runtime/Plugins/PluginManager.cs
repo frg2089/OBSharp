@@ -3,8 +3,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-using OBSharp.Runtime;
-
 namespace OBSharp.Plugins;
 
 internal sealed partial class PluginManager(ILogger<PluginManager> logger)
@@ -13,7 +11,6 @@ internal sealed partial class PluginManager(ILogger<PluginManager> logger)
 
     public IEnumerable<ServiceDescriptor> LoadPlugins()
     {
-
         logger.LogInformation("");
         yield break;
     }
