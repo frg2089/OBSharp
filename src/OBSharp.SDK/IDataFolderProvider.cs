@@ -1,4 +1,4 @@
-namespace OBSharp;
+﻿namespace OBSharp;
 
 public interface IDataFolderProvider
 {

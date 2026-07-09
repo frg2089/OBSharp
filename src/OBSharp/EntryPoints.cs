@@ -2,6 +2,9 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text.Json;
+
+using OBSharp.Models;
 
 using ObsInterop;
 
@@ -14,6 +17,8 @@ public static unsafe class EntryPoints
     private const string AssemblyFileName = "OBSharp.Runtime.dll";
     private const string RuntimeConfigFileName = "OBSharp.Runtime.runtimeconfig.json";
     private const string TypeName = "OBSharp.OBSModule, OBSharp.Runtime";
+    private const string Tfm = "net10.0";
+    private const string FrameworkVersion = "10.0.0";
 
     private static obs_module* s_obs_module_pointer;
     private static HostFXR? s_hostFxr;
@@ -27,6 +32,10 @@ public static unsafe class EntryPoints
     private static nint s_obs_module_post_load;
     private static nint s_obs_module_unload;
     private static nint s_obs_module_free_locale;
+
+    private static Framework NETCore => new("Microsoft.NETCore.App", FrameworkVersion);
+    private static Framework WindowsDesktop => new("Microsoft.WindowsDesktop.App", FrameworkVersion);
+    private static Framework AspNetCore => new("Microsoft.AspNetCore.App", FrameworkVersion);
 
     private static bool LoadMethod(string methodName, string? delegateTypeName, [NotNullWhen(true)] out nint @delegate, bool required)
     {
@@ -63,9 +72,13 @@ public static unsafe class EntryPoints
 
             if (Marshal.PtrToStringUTF8((nint)Obs.obs_get_module_binary_path(s_obs_module_pointer)) is not { Length: not 0 } unmanaged)
                 throw new InvalidOperationException("Cannot get current plugin's binary path.");
-
             unmanaged = Path.GetFullPath(unmanaged);
             Logger.Debug($"OBSharp Unmanaged Path: {unmanaged}");
+
+            if (Marshal.PtrToStringUTF8((nint)Obs.obs_get_module_data_path(s_obs_module_pointer)) is not { Length: not 0 } dataPath)
+                throw new InvalidOperationException("Cannot get current plugin's data path.");
+            dataPath = Path.GetFullPath(dataPath);
+            Logger.Debug($"OBSharp Data Path: {dataPath}");
 
             if (Path.GetDirectoryName(unmanaged) is not { Length: not 0 } binArch)
                 throw new DirectoryNotFoundException($"Cannot found the path \"{unmanaged}\"'s parent.");
@@ -77,30 +90,63 @@ public static unsafe class EntryPoints
             string asm = Path.Combine(binAny, AssemblyFileName);
             Logger.Debug($"OBSharp Managed Path: {asm}");
 
-            string runtimeconfig = Path.Combine(binAny, RuntimeConfigFileName);
-            Logger.Debug($"CoreCLR Runtime Config Path: {runtimeconfig}");
+            string runtimeconfigTemplate = Path.Combine(dataPath, RuntimeConfigFileName);
+            RuntimeConfig? runtimeConfig = null;
+            if (File.Exists(runtimeconfigTemplate))
+            {
+                using var fs = File.OpenRead(runtimeconfigTemplate);
+                runtimeConfig = JsonSerializer.Deserialize(fs, SourceGenerationContext.Default.RuntimeConfig);
+            }
 
-            string hostfxrPath = NetHost.GetHostFxrPath();
-            Logger.Info($"Found CoreCLR Host Framework at \"{hostfxrPath}\".");
+            runtimeConfig ??= new();
+            runtimeConfig.RuntimeOptions.Tfm = Tfm;
+            runtimeConfig.RuntimeOptions.Frameworks.Add(NETCore);
 
-            s_hostFxr = new HostFXR(hostfxrPath);
-            Logger.Debug($"CoreCLR Host Framework loaded!");
+            string appsettings = Path.Combine(dataPath, "appsettings.json");
+            if (File.Exists(appsettings))
+            {
+                using var fs = File.OpenRead(appsettings);
+                var appconfig = JsonSerializer.Deserialize(fs, SourceGenerationContext.Default.AppSettings);
+                if (appconfig?.Runtime.UseAspNet is true)
+                    runtimeConfig.RuntimeOptions.Frameworks.Add(AspNetCore);
+                if (appconfig?.Runtime.UseWindowsDesktop is true)
+                    runtimeConfig.RuntimeOptions.Frameworks.Add(WindowsDesktop);
+            }
 
-            s_hostFxr.InitializeForRuntimeConfig(runtimeconfig, null, out s_context);
+            string runtimeconfig = Path.GetTempFileName();
+            try
+            {
+                using (var fs = File.Create(runtimeconfig))
+                    JsonSerializer.Serialize(fs, runtimeConfig, SourceGenerationContext.Default.RuntimeConfig);
 
-            s_context.LoadAssembly(asm);
+                Logger.Debug($"CoreCLR Runtime Config Path: {runtimeconfig}");
 
-            LoadMethod("SetPointer", HostFXR.UNMANAGEDCALLERSONLY_METHOD, out s_obs_module_set_pointer, true);
-            LoadMethod("Load", HostFXR.UNMANAGEDCALLERSONLY_METHOD, out s_obs_module_load, true);
+                string hostfxrPath = NetHost.GetHostFxrPath();
+                Logger.Info($"Found CoreCLR Host Framework at \"{hostfxrPath}\".");
 
-            LoadMethod("GetName", HostFXR.UNMANAGEDCALLERSONLY_METHOD, out s_obs_module_name, false);
-            LoadMethod("GetDescription", HostFXR.UNMANAGEDCALLERSONLY_METHOD, out s_obs_module_description, false);
-            LoadMethod("SetLocale", HostFXR.UNMANAGEDCALLERSONLY_METHOD, out s_obs_module_set_locale, false);
-            LoadMethod("PostLoad", HostFXR.UNMANAGEDCALLERSONLY_METHOD, out s_obs_module_post_load, false);
-            LoadMethod("Unload", HostFXR.UNMANAGEDCALLERSONLY_METHOD, out s_obs_module_unload, false);
-            LoadMethod("FreeLocale", HostFXR.UNMANAGEDCALLERSONLY_METHOD, out s_obs_module_free_locale, false);
+                s_hostFxr = new HostFXR(hostfxrPath);
+                Logger.Debug($"CoreCLR Host Framework loaded!");
 
-            return true;
+                s_hostFxr.InitializeForRuntimeConfig(runtimeconfig, null, out s_context);
+
+                s_context.LoadAssembly(asm);
+
+                LoadMethod("SetPointer", HostFXR.UNMANAGEDCALLERSONLY_METHOD, out s_obs_module_set_pointer, true);
+                LoadMethod("Load", HostFXR.UNMANAGEDCALLERSONLY_METHOD, out s_obs_module_load, true);
+
+                LoadMethod("GetName", HostFXR.UNMANAGEDCALLERSONLY_METHOD, out s_obs_module_name, false);
+                LoadMethod("GetDescription", HostFXR.UNMANAGEDCALLERSONLY_METHOD, out s_obs_module_description, false);
+                LoadMethod("SetLocale", HostFXR.UNMANAGEDCALLERSONLY_METHOD, out s_obs_module_set_locale, false);
+                LoadMethod("PostLoad", HostFXR.UNMANAGEDCALLERSONLY_METHOD, out s_obs_module_post_load, false);
+                LoadMethod("Unload", HostFXR.UNMANAGEDCALLERSONLY_METHOD, out s_obs_module_unload, false);
+                LoadMethod("FreeLocale", HostFXR.UNMANAGEDCALLERSONLY_METHOD, out s_obs_module_free_locale, false);
+
+                return true;
+            }
+            finally
+            {
+                File.Delete(runtimeconfig);
+            }
         }
         catch (Exception e)
         {

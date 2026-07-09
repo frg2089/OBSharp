@@ -8,7 +8,7 @@ using OBSharp.Plugins;
 
 namespace OBSharp.Hosts;
 
-public sealed class OBSModuleHostBuilder
+internal sealed class OBSModuleHostBuilder
 {
     public IConfigurationBuilder Configuration { get; } = new ConfigurationBuilder();
     public IServiceCollection Service { get; } = new ServiceCollection();
@@ -23,15 +23,16 @@ public sealed class OBSModuleHostBuilder
                 PluginManager.LoadPlugins(Service, fs);
 
         Service
-            .AddSingleton<IDataFolderProvider>(new DataFolderProvider(dataPath));
-
-        Service
             .AddSingleton<OBSModuleHost>()
             .AddOptions<OBSModuleHostOptions>()
             .BindConfiguration("Runtime")
             .PostConfigure(options => options.ContentPath = dataPath)
             .ValidateDataAnnotations()
             .ValidateOnStart();
+
+        Service
+            .AddSingleton<IDataFolderProvider>(provider => provider.GetRequiredService<OBSModuleHost>())
+            .AddSingleton<IRuntimeInfoProvider>(provider => provider.GetRequiredService<OBSModuleHost>());
 
         Service.AddLogging(builder =>
         {

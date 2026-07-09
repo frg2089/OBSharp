@@ -9,20 +9,27 @@ using ObsInterop;
 
 namespace OBSharp.Hosts;
 
-public sealed class OBSModuleHostOptions
+internal sealed class OBSModuleHostOptions
 {
+    public bool UseAspNet { get; set; }
+    public bool UseWindowsDesktop { get; set; }
     [Required]
     public string ContentPath { get; set; } = default!;
 }
 
-public sealed partial class OBSModuleHost(
+internal sealed partial class OBSModuleHost(
     PluginManager pluginManager,
-    IOptionsMonitor<OBSModuleHostOptions> options,
+    IOptions<OBSModuleHostOptions> options,
     ILogger<OBSModuleHost> logger,
-    IEnumerable<ObsPlugin> plugins)
+    IEnumerable<ObsPlugin> plugins) : IDataFolderProvider, IRuntimeInfoProvider
 {
     private unsafe obs_module* _obs_module_pointer;
-    public OBSModuleHostOptions Options => options.CurrentValue;
+    public OBSModuleHostOptions Options => options.Value;
+
+    public bool UseAspNet => Options.UseAspNet;
+    public bool UseWindowsDesktop => Options.UseWindowsDesktop;
+
+    public string GetDataFolder(string name) => Path.Combine(Options.ContentPath, name);
 
     public unsafe void SetPointer(obs_module* module)
     {
