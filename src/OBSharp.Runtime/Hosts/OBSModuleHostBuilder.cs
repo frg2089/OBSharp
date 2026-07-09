@@ -4,6 +4,8 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Configuration;
 
+using OBSharp.Plugins;
+
 namespace OBSharp.Hosts;
 
 public sealed class OBSModuleHostBuilder
@@ -14,6 +16,23 @@ public sealed class OBSModuleHostBuilder
     public OBSModuleHostBuilder(string dataPath)
     {
         Configuration.AddJsonFile(Path.Combine(dataPath, "appsettings.json"), true);
+
+        string pluginList = Path.Combine(dataPath, "plugins.ini");
+        if (File.Exists(pluginList))
+            using (var fs = File.OpenText(pluginList))
+                PluginManager.LoadPlugins(Service, fs);
+
+        Service
+            .AddSingleton<IDataFolderProvider>(new DataFolderProvider(dataPath));
+
+        Service
+            .AddSingleton<OBSModuleHost>()
+            .AddOptions<OBSModuleHostOptions>()
+            .BindConfiguration("Runtime")
+            .PostConfigure(options => options.ContentPath = dataPath)
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+
         Service.AddLogging(builder =>
         {
             builder.AddProvider(new OBSLoggerProvider());
@@ -27,6 +46,7 @@ public sealed class OBSModuleHostBuilder
         Service.TryAddSingleton(config);
         Service.TryAddSingleton<IConfiguration>(config);
         var provider = Service.BuildServiceProvider();
-        return ActivatorUtilities.CreateInstance<OBSModuleHost>(provider);
+
+        return provider.GetRequiredService<OBSModuleHost>();
     }
 }
