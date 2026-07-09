@@ -1,6 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 
-namespace OBSharp;
+namespace OBSharp.Hosts;
 
 internal sealed class OBSLoggerProvider : ILoggerProvider
 {

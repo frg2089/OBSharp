@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging;
 
 using ObsInterop;
 
-namespace OBSharp;
+namespace OBSharp.Hosts;
 
 internal sealed class OBSLogger(string categoryName) : ILogger
 {
