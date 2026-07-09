@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using System.Runtime.CompilerServices;
 
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -33,52 +34,95 @@ internal sealed partial class OBSModuleHost(
 
     public unsafe void SetPointer(obs_module* module)
     {
-        _obs_module_pointer = module;
-        logger.LogDebug("SetPointer");
-        LogContentPath(Options.ContentPath);
-        logger.LogInformation("Initialized.");
+        try
+        {
+            _obs_module_pointer = module;
+            logger.LogDebug("SetPointer");
+            LogContentPath(Options.ContentPath);
+            logger.LogInformation("Initialized.");
+        }
+        catch (Exception ex)
+        {
+            LogError(ex);
+        }
     }
 
     public bool Load()
     {
-        logger.LogDebug("Load");
-
-        foreach (var plugin in plugins)
+        try
         {
-            if (!plugin.Load())
-                logger.LogWarning("Plugin {} failed to load.", plugin.GetType());
-        }
+            logger.LogDebug("Load");
 
-        return true;
+            foreach (var plugin in plugins)
+            {
+                if (!plugin.Load())
+                    logger.LogWarning("Plugin {} failed to load.", plugin.GetType());
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            LogError(ex);
+            return false;
+        }
     }
 
     public void Unload()
     {
-        logger.LogDebug("Unload");
-        foreach (var plugin in plugins)
+        try
         {
-            plugin.Unload();
-            pluginManager.UnloadPlugins(plugin.GetType());
+            logger.LogDebug("Unload");
+            foreach (var plugin in plugins)
+            {
+                plugin.Unload();
+                pluginManager.UnloadPlugins(plugin.GetType());
+            }
+        }
+        catch (Exception ex)
+        {
+            LogError(ex);
         }
     }
 
     public void PostLoad()
     {
-        logger.LogDebug("PostLoad");
-        foreach (var plugin in plugins)
+        try
         {
-            plugin.PostLoad();
+            logger.LogDebug("PostLoad");
+            foreach (var plugin in plugins)
+            {
+                plugin.PostLoad();
+            }
+        }
+        catch (Exception ex)
+        {
+            LogError(ex);
         }
     }
 
     public void SetLocale(string? locale)
     {
-        LogLocale(locale);
+        try
+        {
+            LogLocale(locale);
+        }
+        catch (Exception ex)
+        {
+            LogError(ex);
+        }
     }
 
     public void FreeLocale()
     {
-        logger.LogDebug("FreeLocale");
+        try
+        {
+            logger.LogDebug("FreeLocale");
+        }
+        catch (Exception ex)
+        {
+            LogError(ex);
+        }
     }
 
     [LoggerMessage(LogLevel.Debug, "ContentPath: {ContentPath}")]
@@ -86,4 +130,7 @@ internal sealed partial class OBSModuleHost(
 
     [LoggerMessage(LogLevel.Information, "Locale: {Locale}")]
     private partial void LogLocale(string? locale);
+
+    [LoggerMessage(LogLevel.Error, "Unhandled Exception in {Method}")]
+    private partial void LogError(Exception ex, [CallerMemberName] string method = "");
 }
