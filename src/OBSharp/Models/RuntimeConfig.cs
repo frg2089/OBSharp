@@ -18,9 +18,11 @@ internal sealed record class RuntimeOptions
     public string Tfm { get; set; } = "net10.0";
 
     [JsonPropertyName("framework")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Framework? Framework { get; set; }
 
     [JsonPropertyName("frameworks")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<Framework>? Frameworks { get; set; }
 
     [JsonExtensionData]
