@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 
 using Microsoft.Extensions.Logging;
@@ -19,10 +20,9 @@ internal sealed class OBSModuleHostOptions
 internal sealed partial class OBSModuleHost(
     PluginManager pluginManager,
     IOptions<OBSModuleHostOptions> options,
-    ILogger<OBSModuleHost> logger,
-    IEnumerable<ObsPlugin> plugins) : IDataFolderProvider, IRuntimeInfoProvider
+    ILogger<OBSModuleHost> logger) : IDataFolderProvider, IRuntimeInfoProvider
 {
-    private unsafe nint _obs_module_pointer;
+    private nint _obs_module_pointer;
     public OBSModuleHostOptions Options => options.Value;
 
     public bool UseAspNet => Options.UseAspNet;
@@ -30,7 +30,7 @@ internal sealed partial class OBSModuleHost(
 
     public string GetDataFolder(string name) => Path.Combine(Options.ContentPath, name);
 
-    public unsafe void SetPointer(nint module)
+    public void SetPointer(nint module)
     {
         try
         {
@@ -51,7 +51,7 @@ internal sealed partial class OBSModuleHost(
         {
             logger.LogDebug("Load");
 
-            foreach (var plugin in plugins)
+            foreach (var plugin in pluginManager.GetPlugins())
             {
                 if (!plugin.Load())
                     logger.LogWarning("Plugin {} failed to load.", plugin.GetType());
@@ -71,11 +71,8 @@ internal sealed partial class OBSModuleHost(
         try
         {
             logger.LogDebug("Unload");
-            foreach (var plugin in plugins)
-            {
-                plugin.Unload();
-                pluginManager.UnloadPlugins(plugin.GetType());
-            }
+            foreach (var plugin in pluginManager.GetPlugins())
+                pluginManager.UnloadPlugin(plugin);
         }
         catch (Exception ex)
         {
@@ -88,10 +85,8 @@ internal sealed partial class OBSModuleHost(
         try
         {
             logger.LogDebug("PostLoad");
-            foreach (var plugin in plugins)
-            {
+            foreach (var plugin in pluginManager.GetPlugins())
                 plugin.PostLoad();
-            }
         }
         catch (Exception ex)
         {
@@ -104,6 +99,12 @@ internal sealed partial class OBSModuleHost(
         try
         {
             LogLocale(locale);
+            if (locale is not null && CultureInfo.GetCultureInfo(locale) is { } culture)
+            {
+                LogCultureInfo(culture);
+                CultureInfo.CurrentUICulture = culture;
+                CultureInfo.CurrentCulture = culture;
+            }
         }
         catch (Exception ex)
         {
@@ -128,6 +129,9 @@ internal sealed partial class OBSModuleHost(
 
     [LoggerMessage(LogLevel.Information, "Locale: {Locale}")]
     private partial void LogLocale(string? locale);
+
+    [LoggerMessage(LogLevel.Information, "CultureInfo: {culture}")]
+    private partial void LogCultureInfo(CultureInfo culture);
 
     [LoggerMessage(LogLevel.Error, "Unhandled Exception in {Method}")]
     private partial void LogError(Exception ex, [CallerMemberName] string method = "");

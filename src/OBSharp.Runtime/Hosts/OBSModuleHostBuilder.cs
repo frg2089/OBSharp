@@ -1,4 +1,6 @@
-﻿using Microsoft.Extensions.Configuration;
+﻿using System.Diagnostics;
+
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -18,9 +20,10 @@ internal sealed class OBSModuleHostBuilder
         Configuration.AddJsonFile(Path.Combine(dataPath, "appsettings.json"), true);
 
         string pluginList = Path.Combine(dataPath, "plugins.ini");
-        if (File.Exists(pluginList))
-            using (var fs = File.OpenText(pluginList))
-                PluginManager.LoadPlugins(Service, fs);
+        using (TextReader fs = File.Exists(pluginList)
+                ? File.OpenText(pluginList)
+                : new StringReader(string.Empty))
+            PluginManager.LoadPlugins(Service, fs);
 
         Service
             .AddSingleton<OBSModuleHost>()
@@ -44,10 +47,32 @@ internal sealed class OBSModuleHostBuilder
     public OBSModuleHost Build()
     {
         var config = Configuration.Build();
-        Service.TryAddSingleton(config);
-        Service.TryAddSingleton<IConfiguration>(config);
+        Service.AddSingleton(config);
+        Service.AddSingleton<IConfiguration>(config);
         var provider = Service.BuildServiceProvider();
+        var logger = provider.GetRequiredService<ILogger<OBSModuleHostBuilder>>();
+        AppDomain.CurrentDomain.UnhandledException += (o, e) =>
+        {
+            if (e.ExceptionObject is Exception ex)
+                logger.LogCritical(ex, "Unhandled exception.");
+            else if (logger.IsEnabled(LogLevel.Critical))
+                logger.LogCritical("Unhandled exception. {ex}", e.ExceptionObject);
 
-        return provider.GetRequiredService<OBSModuleHost>();
+            if (e.IsTerminating)
+                logger.LogCritical("Exited.");
+
+            if (Debugger.IsAttached)
+                Debugger.Break();
+        };
+        try
+        {
+            logger.LogInformation("Building OBSModuleHost.");
+            return provider.GetRequiredService<OBSModuleHost>();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Building OBSModuleHost failed.");
+            throw;
+        }
     }
 }

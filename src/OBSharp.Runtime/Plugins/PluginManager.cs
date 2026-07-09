@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Runtime.Versioning;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -6,7 +7,7 @@ using Microsoft.Extensions.Logging;
 
 namespace OBSharp.Plugins;
 
-public sealed partial class PluginManager(Dictionary<Type, PluginLoadContext> store, ILogger<PluginManager> logger)
+public sealed partial class PluginManager(Dictionary<Type, PluginLoadContext> store, ILogger<PluginManager> logger, IServiceProvider serviceProvider)
 {
     public static void LoadPlugins(IServiceCollection services, TextReader pluginList)
     {
@@ -67,7 +68,7 @@ public sealed partial class PluginManager(Dictionary<Type, PluginLoadContext> st
             services.TryAddEnumerable(ServiceDescriptor.Singleton(typeof(ObsPlugin), type));
         }
 
-        services.AddSingleton(provider =>
+        services.AddSingleton<PluginManager>(provider =>
         {
             var logger = provider.GetRequiredService<ILogger<PluginManager>>();
             var current = log.First;
@@ -78,12 +79,26 @@ public sealed partial class PluginManager(Dictionary<Type, PluginLoadContext> st
                 current = current.Next;
             }
 
-            return ActivatorUtilities.CreateInstance<PluginManager>(provider, store, logger);
+            return new(store, logger, provider);
         });
     }
 
-    public void UnloadPlugins(Type pluginType)
+    public IEnumerable<ObsPlugin> GetPlugins()
     {
+        foreach (var type in store.Keys)
+        {
+            if (serviceProvider.GetService(type) is ObsPlugin plugin)
+                yield return plugin;
+        }
+    }
+
+    public void UnloadPlugin(ObsPlugin plugin)
+    {
+        plugin.Unload();
+        if (plugin is IDisposable disposable)
+            disposable.Dispose();
+
+        var pluginType = plugin.GetType();
         if (!store.TryGetValue(pluginType, out var context))
             return;
 

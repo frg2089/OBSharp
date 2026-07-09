@@ -1,4 +1,5 @@
-﻿using System.Runtime.InteropServices;
+﻿using System.Diagnostics;
+using System.Runtime.InteropServices;
 
 using Microsoft.Extensions.Logging;
 
@@ -22,7 +23,7 @@ internal sealed partial class OBSLogger(string categoryName) : ILogger
 
     public bool IsEnabled(LogLevel logLevel) => true;
 
-    public unsafe void Log<TState>(
+    public void Log<TState>(
         LogLevel logLevel,
         EventId eventId,
         TState state,
@@ -64,7 +65,9 @@ internal sealed partial class OBSLogger(string categoryName) : ILogger
             scope = scope.Parent;
         }
 
-        nint msg = Marshal.StringToCoTaskMemUTF8($"[OBSharp] {level,-5} {categoryName,-16}: {message}");
+        string text = $"[OBSharp] {level,-5} {categoryName,-16}: {message}";
+        Debug.WriteLine(text);
+        nint msg = Marshal.StringToCoTaskMemUTF8(text);
         blog(log_level, msg);
         Marshal.FreeCoTaskMem(msg);
     }

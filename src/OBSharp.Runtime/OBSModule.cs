@@ -14,7 +14,7 @@ public static partial class OBSModule
     public const string Description = "通过 CoreCLR 运行插件";
 
     [UnmanagedCallersOnly]
-    public static unsafe void SetPointer(nint module)
+    public static void SetPointer(nint module)
     {
         string? path = Marshal.PtrToStringUTF8(obs_get_module_data_path(module));
         Debug.Assert(path is not null);
