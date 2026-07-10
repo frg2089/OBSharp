@@ -10,6 +10,7 @@
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.9" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Configuration" Version="10.0.9" />
     <PackageVersion Include="Microsoft.Extensions.Options.DataAnnotations" Version="10.0.9" />
+    <PackageVersion Include="NetObsBindings" Version="32.0.0" />
     <PackageVersion Include="Shimakaze.HostFxr" Version="0.0.10" />
     <PackageVersion Include="Shimakaze.NetHost" Version="0.0.10" />
   </ItemGroup>

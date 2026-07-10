@@ -3,9 +3,9 @@ using System.Runtime.InteropServices;
 
 using Microsoft.Extensions.Logging;
 
-namespace OBSharp.Hosts;
+namespace OBSharp.Runtime;
 
-internal sealed partial class OBSLogger(string categoryName) : ILogger
+internal sealed partial class OBSharpLogger(string categoryName) : ILogger
 {
     public const int LOG_ERROR = 100;
     public const int LOG_WARNING = 200;

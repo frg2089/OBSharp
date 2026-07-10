@@ -1,36 +1,27 @@
-﻿using System.ComponentModel.DataAnnotations;
-using System.Globalization;
+﻿using System.Globalization;
 using System.Runtime.CompilerServices;
 
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-using OBSharp.Plugins;
+using ObsInterop;
 
-namespace OBSharp.Hosts;
+namespace OBSharp.Runtime;
 
-internal sealed class OBSModuleHostOptions
+internal sealed unsafe partial class OBSharpHost(
+    OBSharpPluginManager pluginManager,
+    IOptions<OBSharpHostOptions> options,
+    ILogger<OBSharpHost> logger) : IDataFolderProvider, IRuntimeInfoProvider
 {
-    public bool UseAspNet { get; set; }
-    public bool UseWindowsDesktop { get; set; }
-    [Required]
-    public string ContentPath { get; set; } = default!;
-}
-
-internal sealed partial class OBSModuleHost(
-    PluginManager pluginManager,
-    IOptions<OBSModuleHostOptions> options,
-    ILogger<OBSModuleHost> logger) : IDataFolderProvider, IRuntimeInfoProvider
-{
-    private nint _obs_module_pointer;
-    public OBSModuleHostOptions Options => options.Value;
+    private obs_module* _obs_module_pointer;
+    public OBSharpHostOptions Options => options.Value;
 
     public bool UseAspNet => Options.UseAspNet;
     public bool UseWindowsDesktop => Options.UseWindowsDesktop;
 
     public string GetDataFolder(string name) => Path.Combine(Options.ContentPath, name);
 
-    public void SetPointer(nint module)
+    public void SetPointer(obs_module* module)
     {
         try
         {

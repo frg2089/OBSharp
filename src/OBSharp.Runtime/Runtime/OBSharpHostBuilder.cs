@@ -2,20 +2,17 @@
 
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Configuration;
 
-using OBSharp.Plugins;
+namespace OBSharp.Runtime;
 
-namespace OBSharp.Hosts;
-
-internal sealed class OBSModuleHostBuilder
+internal sealed class OBSharpHostBuilder
 {
     public IConfigurationBuilder Configuration { get; } = new ConfigurationBuilder();
     public IServiceCollection Service { get; } = new ServiceCollection();
 
-    public OBSModuleHostBuilder(string dataPath)
+    public OBSharpHostBuilder(string dataPath)
     {
         Configuration.AddJsonFile(Path.Combine(dataPath, "appsettings.json"), true);
 
@@ -23,34 +20,34 @@ internal sealed class OBSModuleHostBuilder
         using (TextReader fs = File.Exists(pluginList)
                 ? File.OpenText(pluginList)
                 : new StringReader(string.Empty))
-            PluginManager.LoadPlugins(Service, fs);
+            OBSharpPluginManager.LoadPlugins(Service, fs);
 
         Service
-            .AddSingleton<OBSModuleHost>()
-            .AddOptions<OBSModuleHostOptions>()
+            .AddSingleton<OBSharpHost>()
+            .AddOptions<OBSharpHostOptions>()
             .BindConfiguration("Runtime")
             .PostConfigure(options => options.ContentPath = dataPath)
             .ValidateDataAnnotations()
             .ValidateOnStart();
 
         Service
-            .AddSingleton<IDataFolderProvider>(provider => provider.GetRequiredService<OBSModuleHost>())
-            .AddSingleton<IRuntimeInfoProvider>(provider => provider.GetRequiredService<OBSModuleHost>());
+            .AddSingleton<IDataFolderProvider>(provider => provider.GetRequiredService<OBSharpHost>())
+            .AddSingleton<IRuntimeInfoProvider>(provider => provider.GetRequiredService<OBSharpHost>());
 
         Service.AddLogging(builder =>
         {
-            builder.AddProvider(new OBSLoggerProvider());
+            builder.AddProvider(new OBSharpLoggerProvider());
             builder.AddConfiguration();
         });
     }
 
-    public OBSModuleHost Build()
+    public OBSharpHost Build()
     {
         var config = Configuration.Build();
         Service.AddSingleton(config);
         Service.AddSingleton<IConfiguration>(config);
         var provider = Service.BuildServiceProvider();
-        var logger = provider.GetRequiredService<ILogger<OBSModuleHostBuilder>>();
+        var logger = provider.GetRequiredService<ILogger<OBSharpHostBuilder>>();
         AppDomain.CurrentDomain.UnhandledException += (o, e) =>
         {
             if (e.ExceptionObject is Exception ex)
@@ -66,12 +63,12 @@ internal sealed class OBSModuleHostBuilder
         };
         try
         {
-            logger.LogInformation("Building OBSModuleHost.");
-            return provider.GetRequiredService<OBSModuleHost>();
+            logger.LogInformation("Building OBSharpHost.");
+            return provider.GetRequiredService<OBSharpHost>();
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Building OBSModuleHost failed.");
+            logger.LogError(ex, "Building OBSharpHost failed.");
             throw;
         }
     }

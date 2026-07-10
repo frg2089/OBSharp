@@ -1,9 +1,9 @@
 ﻿using System.Reflection;
 using System.Runtime.Loader;
 
-namespace OBSharp.Plugins;
+namespace OBSharp.Runtime;
 
-public sealed class PluginLoadContext(string pluginPath) : AssemblyLoadContext(Path.GetFileNameWithoutExtension(pluginPath), true)
+public sealed class OBSharpPluginLoadContext(string pluginPath) : AssemblyLoadContext(Path.GetFileNameWithoutExtension(pluginPath), true)
 {
     private readonly AssemblyDependencyResolver _resolver = new(pluginPath);
 

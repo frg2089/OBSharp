@@ -1,17 +1,16 @@
 ﻿using System.Collections.Immutable;
-using System.Runtime.Versioning;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 
-namespace OBSharp.Plugins;
+namespace OBSharp.Runtime;
 
-public sealed partial class PluginManager(Dictionary<Type, PluginLoadContext> store, ILogger<PluginManager> logger, IServiceProvider serviceProvider)
+public sealed partial class OBSharpPluginManager(Dictionary<Type, OBSharpPluginLoadContext> store, ILogger<OBSharpPluginManager> logger, IServiceProvider serviceProvider)
 {
     public static void LoadPlugins(IServiceCollection services, TextReader pluginList)
     {
-        Dictionary<Type, PluginLoadContext> store = [];
+        Dictionary<Type, OBSharpPluginLoadContext> store = [];
         LinkedList<KeyValuePair<LogLevel, string>> log = [];
         while (pluginList.ReadLine() is string raw)
         {
@@ -45,7 +44,7 @@ public sealed partial class PluginManager(Dictionary<Type, PluginLoadContext> st
 
             string asmPath = path.ToString();
             log.AddLast(KeyValuePair.Create(LogLevel.Debug, $"Load plugin \"{asmPath}\"."));
-            PluginLoadContext context = new(asmPath);
+            OBSharpPluginLoadContext context = new(asmPath);
             var asm = context.LoadFromAssemblyPath(asmPath);
 
             var plugins = asm.ExportedTypes.Where(static i => i.IsAssignableTo(typeof(ObsPlugin))).ToImmutableArray();
@@ -68,9 +67,9 @@ public sealed partial class PluginManager(Dictionary<Type, PluginLoadContext> st
             services.TryAddEnumerable(ServiceDescriptor.Singleton(typeof(ObsPlugin), type));
         }
 
-        services.AddSingleton<PluginManager>(provider =>
+        services.AddSingleton<OBSharpPluginManager>(provider =>
         {
-            var logger = provider.GetRequiredService<ILogger<PluginManager>>();
+            var logger = provider.GetRequiredService<ILogger<OBSharpPluginManager>>();
             var current = log.First;
             while (current is not null)
             {
