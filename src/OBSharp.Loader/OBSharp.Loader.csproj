@@ -3,6 +3,7 @@
   <PropertyGroup>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PublishAot>true</PublishAot>
+    <AssemblyName>OBSharp</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>

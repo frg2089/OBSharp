@@ -40,8 +40,8 @@ if ($Legacy -and $IsWindows) {
     Remove-Item -Path $Private:PluginDataDir -Recurse -Force
   }
   
-  New-Item -ItemType 'SymbolicLink' -Path "$Private:PluginBinDir64\OBSharp.dll" -Value "$Private:ProjectRoot\src\OBSharp\bin\Release\$Private:TFM\publish\win-x64\OBSharp.dll"
-  New-Item -ItemType 'SymbolicLink' -Path "$Private:PluginBinDir32\OBSharp.dll" -Value "$Private:ProjectRoot\src\OBSharp\bin\Release\$Private:TFM\publish\win-x86\OBSharp.dll"
+  New-Item -ItemType 'SymbolicLink' -Path "$Private:PluginBinDir64\OBSharp.dll" -Value "$Private:ProjectRoot\src\OBSharp.Loader\bin\Release\$Private:TFM\publish\win-x64\OBSharp.dll"
+  New-Item -ItemType 'SymbolicLink' -Path "$Private:PluginBinDir32\OBSharp.dll" -Value "$Private:ProjectRoot\src\OBSharp.Loader\bin\Release\$Private:TFM\publish\win-x86\OBSharp.dll"
   New-Item -ItemType 'SymbolicLink' -Path $Private:PluginBinDirAny -Value "$Private:ProjectRoot\src\OBSharp.Runtime\bin\$Private:Configuration\$Private:TFM\"
   New-Item -ItemType 'SymbolicLink' -Path $Private:PluginDataDir -Value "$Private:ProjectRoot\src\OBSharp.Runtime\Data\"
 }
