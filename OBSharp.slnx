@@ -9,6 +9,9 @@
     <File Path="LICENSE" />
     <File Path="nuget.config" />
   </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/OBSharp.PInvoke/OBSharp.PInvoke.csproj" />
+  </Folder>
   <Project Path="src/OBSharp.Loader/OBSharp.Loader.csproj" />
   <Project Path="src/OBSharp.Runtime/OBSharp.Runtime.csproj" />
   <Project Path="src/OBSharp.SDK/OBSharp.SDK.csproj" />
