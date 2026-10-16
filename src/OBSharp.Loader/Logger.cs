@@ -1,6 +1,6 @@
 ﻿using System.Runtime.InteropServices;
 
-namespace OBSharp;
+namespace OBSharp.Loader;
 
 public static partial class Logger
 {

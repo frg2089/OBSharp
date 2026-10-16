@@ -1,6 +1,6 @@
 ﻿using System.Text.Json.Serialization;
 
-namespace OBSharp.Models;
+namespace OBSharp.Loader.Models;
 
 internal sealed record AppSettings(
     [property: JsonPropertyName("Runtime")] Runtime Runtime

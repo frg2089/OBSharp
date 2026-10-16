@@ -1,6 +1,8 @@
 ﻿using System.Text.Json.Serialization;
 
-namespace OBSharp.Models;
+using OBSharp.Loader.Models;
+
+namespace OBSharp.Loader.Models;
 
 [JsonSourceGenerationOptions(WriteIndented = true)]
 [JsonSerializable(typeof(AppSettings))]

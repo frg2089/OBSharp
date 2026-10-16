@@ -4,11 +4,11 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 
-using OBSharp.Models;
+using OBSharp.Loader.Models;
 
 using Shimakaze;
 
-namespace OBSharp;
+namespace OBSharp.Loader;
 
 public static unsafe partial class EntryPoints
 {

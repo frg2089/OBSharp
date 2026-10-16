@@ -1,7 +1,7 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace OBSharp.Models;
+namespace OBSharp.Loader.Models;
 
 internal sealed record class RuntimeConfig
 {
