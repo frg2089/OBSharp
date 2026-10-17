@@ -38,8 +38,8 @@ internal sealed partial class Pipeline
 
         Console.WriteLine("==> Generating raw bindings...");
         InvokeClangSharp(traverse, _stagingDir, logFile: null);
-        var fnCount = Regex.Matches(
-                File.ReadAllText(Path.Combine(_stagingDir, "Libobs.cs")), "public static extern")
+        var fnCount = ExternDeclCountRegex.Matches(
+                File.ReadAllText(Path.Combine(_stagingDir, "Libobs.cs")))
             .Count;
         var fileCount = Directory.GetFiles(_stagingDir, "*.cs").Length;
         Console.WriteLine($"    {fnCount} functions, {fileCount} files");
@@ -110,7 +110,7 @@ internal sealed partial class Pipeline
         var headers = new SortedSet<string>(StringComparer.CurrentCultureIgnoreCase);
         foreach (var line in File.ReadLines(logFile))
         {
-            var m = Regex.Match(line, @"Visiting\s+(lib/obs-studio/[\w\-/\.]+\.h)\s*$");
+            var m = VisitingFileRegex.Match(line);
             if (m.Success)
             {
                 headers.Add(m.Groups[1].Value);
@@ -124,4 +124,10 @@ internal sealed partial class Pipeline
 
         return [.. headers];
     }
+
+    [GeneratedRegex("public static extern")]
+    private static partial Regex ExternDeclCountRegex { get; }
+
+    [GeneratedRegex(@"Visiting\s+(lib/obs-studio/[\w\-/\.]+\.h)\s*$")]
+    private static partial Regex VisitingFileRegex { get; }
 }

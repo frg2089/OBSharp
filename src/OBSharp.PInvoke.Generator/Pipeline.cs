@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace OBSharp.PInvoke.Generator;
 
@@ -204,6 +205,15 @@ internal sealed partial class Pipeline
         proc.WaitForExit();
         return (proc.ExitCode, lines);
     }
+
+    // --- Compile-time regular expressions shared across the pipeline stages ---
+    // (SYSLIB1045): the source generator emits the matcher at build time, which
+    // is faster than the runtime interpreter and allocation-free per call.
+    [GeneratedRegex("\r?\n")]
+    private static partial Regex LineSplitRegex { get; }
+
+    [GeneratedRegex(@"^\s*using ")]
+    private static partial Regex UsingLineRegex { get; }
 }
 
 internal sealed record ParsedParam(string? Native, string CsType, string Name, string Text);

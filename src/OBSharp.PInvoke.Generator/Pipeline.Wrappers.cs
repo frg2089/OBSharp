@@ -162,7 +162,7 @@ internal sealed partial class Pipeline
             var line = rawLines[i];
 
             // Raw externs are converted to LibraryImport partials in stage 2; accept both.
-            var mDecl = Regex.Match(line, "public static (?:extern|partial) ");
+            var mDecl = DeclSignatureRegex.Match(line);
             if (!mDecl.Success)
             {
                 continue;
@@ -231,7 +231,7 @@ internal sealed partial class Pipeline
             var obsolete = false;
             foreach (var a in attrs)
             {
-                var m = Regex.Match(a, @"^\[return: NativeTypeName\(""([^""]+)""\)\]");
+                var m = ReturnNativeRegex.Match(a);
                 if (m.Success)
                 {
                     retNative = m.Groups[1].Value;
@@ -254,7 +254,7 @@ internal sealed partial class Pipeline
                 }
 
                 string? nat = null;
-                var mp = Regex.Match(p, @"^\[NativeTypeName\(""([^""]+)""\)\]\s*(.*)$");
+                var mp = ParamNativeRegex.Match(p);
                 if (mp.Success)
                 {
                     nat = mp.Groups[1].Value;
@@ -290,10 +290,7 @@ internal sealed partial class Pipeline
         foreach (var path in Directory.GetFiles(_rawOutDir, "*.cs"))
         {
             var text = File.ReadAllText(path);
-            foreach (Match m in Regex.Matches(
-                         text,
-                         "public (?:unsafe )?partial struct (\\w+)\\s*\\{(.*?)\\}",
-                         RegexOptions.Singleline))
+            foreach (Match m in StructBodyRegex.Matches(text))
             {
                 var n = m.Groups[1].Value;
                 if (m.Groups[2].Value.Trim().Length > 0)
@@ -308,16 +305,15 @@ internal sealed partial class Pipeline
         }
 
         var opaqueTypes = _declHasContent
-            .Where(kv => !kv.Value && !Regex.IsMatch(kv.Key, "^(pthread|ptw32)_"))
+            .Where(kv => !kv.Value && !PthreadTypeRegex.IsMatch(kv.Key))
             .Select(kv => kv.Key)
             .OrderBy(k => k, StringComparer.CurrentCultureIgnoreCase); // Sort-Object default
 
-        const string suffixRe = "_(release|destroy|close|free|delete)$";
         var handleClassUsed = new HashSet<string>(StringComparer.Ordinal);
         foreach (var t in opaqueTypes)
         {
             var cands = _functions.Where(f =>
-                Regex.IsMatch(f.Name, suffixRe)
+                ReleaseSuffixRegex.IsMatch(f.Name)
                 && f.RetType == "void"
                 && f.Params.Count == 1
                 && (f.Params[0].CsType == t + "*" || f.Params[0].CsType == t + "**")).ToList();
@@ -641,7 +637,7 @@ internal sealed partial class Pipeline
                 continue;
             }
 
-            if (Regex.IsMatch(p.CsType, @"^delegate\* unmanaged\[Cdecl\]<.+>$") && !p.CsType.EndsWith(">*"))
+            if (CdeclFnPtrRegex.IsMatch(p.CsType) && !p.CsType.EndsWith(">*"))
             {
                 fnPtrParams.Add(p);
             }
@@ -651,7 +647,7 @@ internal sealed partial class Pipeline
             }
         }
 
-        if (Regex.IsMatch(fn.RetType, @"^delegate\*"))
+        if (FnPtrRegex.IsMatch(fn.RetType))
         {
             useLibraryImport = false;
         }
@@ -690,7 +686,7 @@ internal sealed partial class Pipeline
         }
 
         // Dotted bases cover BCL replacements like System.Numerics.Vector4*.
-        var mp = Regex.Match(p.CsType, @"^((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*)\*+$");
+        var mp = PointerTypeRegex.Match(p.CsType);
         if (!mp.Success)
         {
             return null;
@@ -705,8 +701,8 @@ internal sealed partial class Pipeline
         var baseRenamed = _renameMap.TryGetValue(bt, out var br) ? br : bt;
         if (_pascalNames.Contains(baseRenamed) && !p.CsType.EndsWith("**"))
         {
-            var isConst = p.Native is not null && Regex.IsMatch(p.Native, "^const ");
-            var typeName = Regex.Replace(p.CsType, @"\*$", "");
+            var isConst = p.Native is not null && ConstPrefixRegex.IsMatch(p.Native);
+            var typeName = TrailingStarRegex.Replace(p.CsType, "");
             return new FirstParamReceiver(bt, $"{(isConst ? "in" : "ref")} {typeName} self", !isConst);
         }
 
@@ -714,8 +710,8 @@ internal sealed partial class Pipeline
         // class key is the short name (System.Numerics.Vector4 -> Vector4Extensions).
         if (_externalCsTypes.Contains(baseRenamed) && !p.CsType.EndsWith("**"))
         {
-            var isConst = p.Native is not null && Regex.IsMatch(p.Native, "^const ");
-            var typeName = Regex.Replace(p.CsType, @"\*$", "");
+            var isConst = p.Native is not null && ConstPrefixRegex.IsMatch(p.Native);
+            var typeName = TrailingStarRegex.Replace(p.CsType, "");
             var shortName = baseRenamed[(baseRenamed.LastIndexOf('.') + 1)..];
             return new FirstParamReceiver(shortName, $"{(isConst ? "in" : "ref")} {typeName} self", !isConst);
         }
@@ -734,7 +730,7 @@ internal sealed partial class Pipeline
             return false;
         }
 
-        var mp = Regex.Match(p.CsType, @"^((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*)\*+$");
+        var mp = PointerTypeRegex.Match(p.CsType);
         if (!mp.Success)
         {
             return false;
@@ -780,7 +776,7 @@ internal sealed partial class Pipeline
             retSig = "bool";
             retAttr = "[return: MarshalAs(UnmanagedType.I1)]";
         }
-        else if (Regex.IsMatch(fn.RetType, @"^void\*+$"))
+        else if (VoidPointerRegex.IsMatch(fn.RetType))
         {
             retSig = "nint";
             retAttr = null;
@@ -816,7 +812,7 @@ internal sealed partial class Pipeline
             {
                 // BCL receiver (in/ref System.Numerics.*): pin it to the raw
                 // pointer shape the helper takes; writes land in place.
-                var recvType = Regex.Replace(recv.BlockReceiver, @"^(?:in|ref) ", string.Empty);
+                var recvType = InRefModifierRegex.Replace(recv.BlockReceiver, string.Empty);
                 recvType = recvType[..^" self".Length];
                 fixedLines.Add($"                fixed ({recvType}* __p_self = &self)");
                 callArgs.Add("__p_self");
@@ -845,7 +841,7 @@ internal sealed partial class Pipeline
             if (external)
             {
                 // in/ref BCL argument pinned to a pointer for the helper.
-                var pType = Regex.Replace(p.CsType, @"\*$", "");
+                var pType = TrailingStarRegex.Replace(p.CsType, "");
                 fixedLines.Add($"                fixed ({pType}* __p_{p.Name} = &{p.Name})");
                 callArgs.Add($"__p_{p.Name}");
             }
@@ -942,7 +938,7 @@ internal sealed partial class Pipeline
         string? hcls = null;
         var isPtr = false;
         string? baseRenamed = null;
-        var mp = Regex.Match(p.CsType, @"^((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*)\*+$");
+        var mp = PointerTypeRegex.Match(p.CsType);
         if (mp.Success)
         {
             var bt = mp.Groups[1].Value;
@@ -975,7 +971,7 @@ internal sealed partial class Pipeline
                 return (p.Text, false);
             }
 
-            var isConst = p.Native is not null && Regex.IsMatch(p.Native, "^const ");
+            var isConst = p.Native is not null && ConstPrefixRegex.IsMatch(p.Native);
 
             // Helper side of a BCL-replaced struct: keep the raw pointer shape
             // (in/ref System.Numerics.* is SYSLIB1051 in LibraryImport). The
@@ -987,7 +983,7 @@ internal sealed partial class Pipeline
                     : p.Text, false);
             }
 
-            return ($"{(isConst ? "in" : "ref")} {Regex.Replace(p.CsType, @"\*$", "")} {p.Name}", !isConst);
+            return ($"{(isConst ? "in" : "ref")} {TrailingStarRegex.Replace(p.CsType, "")} {p.Name}", !isConst);
         }
 
         if (p.Native is not null)
@@ -1006,7 +1002,7 @@ internal sealed partial class Pipeline
         }
 
         string @base;
-        if (param.Native is not null && Regex.IsMatch(param.Native, "^[A-Za-z_]\\w*$"))
+        if (param.Native is not null && IdentifierRegex.IsMatch(param.Native))
         {
             // Typedef name (audio_output_callback_t, obs_hotkey_func, ...) wins.
             var tn = param.Native;
@@ -1167,7 +1163,7 @@ internal sealed partial class Pipeline
             }
 
             var sigText = string.Concat(parTypes.Select((t, i) => ", " + t + " arg" + i));
-            var isUnsafe = Regex.IsMatch(string.Join(" ", parTypes) + " " + retT, @"\*");
+            var isUnsafe = StarRegex.IsMatch(string.Join(" ", parTypes) + " " + retT);
             if (!firstDelegate)
             {
                 lines.Add(string.Empty);
@@ -1247,4 +1243,50 @@ internal sealed partial class Pipeline
             File.WriteAllText(Path.Combine(_handleOutDir, h.Class + ".cs"), string.Join("\n", lines));
         }
     }
+
+    // --- Compile-time regular expressions (SYSLIB1045) ---
+    [GeneratedRegex("public static (?:extern|partial) ")]
+    private static partial Regex DeclSignatureRegex { get; }
+
+    [GeneratedRegex(@"^\[return: NativeTypeName\(""([^""]+)""\)\]")]
+    private static partial Regex ReturnNativeRegex { get; }
+
+    [GeneratedRegex(@"^\[NativeTypeName\(""([^""]+)""\)\]\s*(.*)$")]
+    private static partial Regex ParamNativeRegex { get; }
+
+    [GeneratedRegex("public (?:unsafe )?partial struct (\\w+)\\s*\\{(.*?)\\}", RegexOptions.Singleline)]
+    private static partial Regex StructBodyRegex { get; }
+
+    [GeneratedRegex("^(pthread|ptw32)_")]
+    private static partial Regex PthreadTypeRegex { get; }
+
+    [GeneratedRegex("_(release|destroy|close|free|delete)$")]
+    private static partial Regex ReleaseSuffixRegex { get; }
+
+    [GeneratedRegex(@"^delegate\* unmanaged\[Cdecl\]<.+>$")]
+    private static partial Regex CdeclFnPtrRegex { get; }
+
+    [GeneratedRegex(@"^delegate\*")]
+    private static partial Regex FnPtrRegex { get; }
+
+    [GeneratedRegex(@"^((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*)\*+$")]
+    private static partial Regex PointerTypeRegex { get; }
+
+    [GeneratedRegex("^const ")]
+    private static partial Regex ConstPrefixRegex { get; }
+
+    [GeneratedRegex(@"\*$")]
+    private static partial Regex TrailingStarRegex { get; }
+
+    [GeneratedRegex(@"^void\*+$")]
+    private static partial Regex VoidPointerRegex { get; }
+
+    [GeneratedRegex(@"^(?:in|ref) ")]
+    private static partial Regex InRefModifierRegex { get; }
+
+    [GeneratedRegex("^[A-Za-z_]\\w*$")]
+    private static partial Regex IdentifierRegex { get; }
+
+    [GeneratedRegex(@"\*")]
+    private static partial Regex StarRegex { get; }
 }

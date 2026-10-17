@@ -26,24 +26,20 @@ internal sealed partial class Pipeline
             "\n", Directory.GetFiles(_rawOutDir, "*.cs").OrderBy(Path.GetFileName, StringComparer.Ordinal)
                 .Select(File.ReadAllText));
         var declNames = new HashSet<string>(StringComparer.Ordinal);
-        foreach (Match m in Regex.Matches(
-                     allRawText, "public (?:unsafe )?(?:partial )?(?:struct|class|enum|interface) (\\w+)"))
+        foreach (Match m in DeclaredTypeRegex.Matches(allRawText))
         {
             declNames.Add(m.Groups[1].Value);
         }
 
         // Text without 'using' lines, for "does raw actually reference this name?" checks.
-        var allRawLines = Regex.Split(allRawText, "\r?\n");
-        var rawSigText = string.Join("\n", allRawLines.Where(l => !Regex.IsMatch(l, @"^\s*using\s")));
+        var allRawLines = LineSplitRegex.Split(allRawText);
+        var rawSigText = string.Join("\n", allRawLines.Where(l => !UsingDirectiveRegex.IsMatch(l)));
 
         // Only extern signatures matter for the by-value guard: a shim used as a
         // nested struct field (e.g. __m128 in a union) is layout, not a marshalling
         // boundary.
         var externSigText = string.Join(
-            "\n", allRawLines.Where(l => Regex.IsMatch(l, @"public static (?:extern|partial)")));
-
-        // Compiler messages quote the missing type name with ASCII or curly quotes.
-        const string quoteClass = "[\"'\u2018\u2019\u201C\u201D]";
+            "\n", allRawLines.Where(l => ExternOrPartialRegex.IsMatch(l)));
 
         var shimmed = new HashSet<string>(StringComparer.Ordinal);
         var buildOk = false;
@@ -56,8 +52,8 @@ internal sealed partial class Pipeline
 
             // Match any diagnostic ID (CS0246, SYSLIB1051, ...): restricting to
             // `error CS\d+:` would let non-CS failures report a false "build OK".
-            var errLines = outLines.Where(l => Regex.IsMatch(l, ": error ")).ToList();
-            var warnCount = outLines.Count(l => Regex.IsMatch(l, ": warning "));
+            var errLines = outLines.Where(l => ErrorDiagnosticRegex.IsMatch(l)).ToList();
+            var warnCount = outLines.Count(l => WarningDiagnosticRegex.IsMatch(l));
             lastErrors = errLines;
             if (errLines.Count == 0)
             {
@@ -75,7 +71,7 @@ internal sealed partial class Pipeline
                 }
 
                 string? nm = null;
-                var mq = Regex.Match(e, quoteClass + @"(\w+)" + quoteClass);
+                var mq = QuotedIdentifierRegex.Match(e);
                 if (mq.Success)
                 {
                     nm = mq.Groups[1].Value;
@@ -158,4 +154,23 @@ internal sealed partial class Pipeline
                 "Build failed after shimming.\n" + string.Join("\n", lastErrors.Take(10)));
         }
     }
+
+    [GeneratedRegex("public (?:unsafe )?(?:partial )?(?:struct|class|enum|interface) (\\w+)")]
+    private static partial Regex DeclaredTypeRegex { get; }
+
+    // Compiler messages quote the missing type name with ASCII or curly quotes.
+    [GeneratedRegex("[\"'\u2018\u2019\u201C\u201D](\\w+)[\"'\u2018\u2019\u201C\u201D]")]
+    private static partial Regex QuotedIdentifierRegex { get; }
+
+    [GeneratedRegex(@"public static (?:extern|partial)")]
+    private static partial Regex ExternOrPartialRegex { get; }
+
+    [GeneratedRegex(@"^\s*using\s")]
+    private static partial Regex UsingDirectiveRegex { get; }
+
+    [GeneratedRegex(": error ")]
+    private static partial Regex ErrorDiagnosticRegex { get; }
+
+    [GeneratedRegex(": warning ")]
+    private static partial Regex WarningDiagnosticRegex { get; }
 }
