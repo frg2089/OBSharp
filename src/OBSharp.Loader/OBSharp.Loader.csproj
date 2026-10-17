@@ -11,4 +11,8 @@
     <PackageReference Include="Shimakaze.NetHost" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\OBSharp.PInvoke\OBSharp.PInvoke.csproj" />
+  </ItemGroup>
+
 </Project>
