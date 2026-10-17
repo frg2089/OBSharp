@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace OBSharp.PInvoke.Generator;
+namespace OBSharp.Interop.Generator;
 
 // Stage 3: friendly wrapper layer (Generated/Wrappers + Generated/Handles).
 internal sealed partial class Pipeline
@@ -287,7 +287,7 @@ internal sealed partial class Pipeline
         "using System.Runtime.CompilerServices;",
         "using System.Runtime.InteropServices;",
         "",
-        "namespace OBSharp.PInvoke",
+        "namespace OBSharp.Interop",
         "{",
     ];
 

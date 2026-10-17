@@ -1,4 +1,4 @@
-namespace OBSharp.PInvoke.Generator;
+namespace OBSharp.Interop.Generator;
 
 internal static class Program
 {
@@ -19,7 +19,7 @@ internal static class Program
             else
             {
                 Console.Error.WriteLine($"Unknown option: {raw}");
-                Console.Error.WriteLine("Usage: dotnet run --project src/OBSharp.PInvoke.Generator [-- -SkipRaw] [-SkipBuild]");
+                Console.Error.WriteLine("Usage: dotnet run --project src/OBSharp.Interop.Generator [-- -SkipRaw] [-SkipBuild]");
                 return 2;
             }
         }

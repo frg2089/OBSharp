@@ -481,4 +481,4 @@ $RECYCLE.BIN/
 # Vim temporary swap files
 *.swp
 
-src/OBSharp.PInvoke/Generated/*
+src/OBSharp.Interop/Generated/*

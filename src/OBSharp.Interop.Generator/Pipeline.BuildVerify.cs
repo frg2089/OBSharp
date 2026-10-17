@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace OBSharp.PInvoke.Generator;
+namespace OBSharp.Interop.Generator;
 
 // Stage 4: system-type compat shims + build verification.
 internal sealed partial class Pipeline
@@ -19,7 +19,7 @@ internal sealed partial class Pipeline
     private void VerifyBuildStage()
     {
         Console.WriteLine("==> Verifying build...");
-        var csproj = Path.Combine(_repoRoot, "src", "OBSharp.PInvoke", "OBSharp.PInvoke.csproj");
+        var csproj = Path.Combine(_repoRoot, "src", "OBSharp.Interop", "OBSharp.Interop.csproj");
         var compatPath = Path.Combine(_rawOutDir, "Compat.cs");
 
         var allRawText = string.Join(
@@ -122,7 +122,7 @@ internal sealed partial class Pipeline
                 "// Shims for system-header types referenced by raw signatures (pointer-only).",
                 "#pragma warning disable CS8981 // type name contains only lower-cased ascii characters (native C naming)",
                 "#nullable enable",
-                "namespace OBSharp.PInvoke",
+                "namespace OBSharp.Interop",
                 "{",
             ];
             foreach (var nm in shimmed.OrderBy(x => x, StringComparer.CurrentCultureIgnoreCase)) // Sort-Object default

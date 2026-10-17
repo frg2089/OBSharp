@@ -12,7 +12,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\OBSharp.PInvoke\OBSharp.PInvoke.csproj" />
+    <ProjectReference Include="..\OBSharp.Interop\OBSharp.Interop.csproj" />
   </ItemGroup>
 
 </Project>

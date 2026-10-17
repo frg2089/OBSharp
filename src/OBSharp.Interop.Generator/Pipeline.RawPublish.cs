@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace OBSharp.PInvoke.Generator;
+namespace OBSharp.Interop.Generator;
 
 // Stage 2: raw files -> Generated/Raw, normalized for idiomatic C#:
 //   - PascalCase every snake_case struct/enum/union type (declaration + every

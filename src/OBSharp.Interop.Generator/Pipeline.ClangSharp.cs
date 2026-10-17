@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace OBSharp.PInvoke.Generator;
+namespace OBSharp.Interop.Generator;
 
 // Stage 1: raw bindings via ClangSharp.
 internal sealed partial class Pipeline
@@ -144,7 +144,7 @@ internal sealed partial class Pipeline
             "-I", PthreadDir.Replace('/', '\\'),
             "-I", _shimDir,
             "-o", outDir,
-            "-n", "OBSharp.PInvoke",
+            "-n", "OBSharp.Interop",
             // PascalCase module name: the LibraryImport source generator re-emits a
             // partial declaration of this class per method in its obj/ output, which
             // cannot carry #pragma directives - a lowercase 'libobs' there triggers

@@ -1,4 +1,4 @@
-﻿using OBSharp.PInvoke;
+﻿using OBSharp.Interop;
 
 namespace OBSharp.Loader;
 

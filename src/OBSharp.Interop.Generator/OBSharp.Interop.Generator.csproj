@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <AssemblyName>OBSharp.PInvoke.Generator</AssemblyName>
+    <AssemblyName>OBSharp.Interop.Generator</AssemblyName>
   </PropertyGroup>
 
 </Project>

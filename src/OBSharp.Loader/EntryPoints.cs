@@ -6,7 +6,7 @@ using System.Text.Json;
 
 using OBSharp.Loader.Models;
 
-using OBSharp.PInvoke;
+using OBSharp.Interop;
 
 using Shimakaze;
 
