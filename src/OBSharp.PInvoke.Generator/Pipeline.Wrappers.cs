@@ -98,6 +98,187 @@ internal sealed partial class Pipeline
 
     private const string DefaultGroup = "Base";
 
+    // --- ownership tables -----------------------------------------------------
+    // The wrapper layer turns an opaque pointer into a SafeHandle only when the
+    // native call hands the caller a NEW reference (ownership transfer, or an
+    // incremented refcount). Everything else keeps its raw pointer on purpose:
+    // wrapping a borrowed pointer (gs_get_context, obs_get_video,
+    // obs_output_get_service, obs_data_get_string, ...) in an owning handle
+    // would free memory the caller does not own - a use-after-free.
+    //
+    // Under-reporting here only leaks (the caller still holds a raw pointer they
+    // can wrap by hand); over-reporting crashes. Every entry therefore has to be
+    // backed by libobs evidence ("use obs_*_release", "increments the reference
+    // counter", obs_data_array_item's os_atomic_inc_long, *_create, ...).
+    private static readonly HashSet<string> OwnedReturns = new(StringComparer.Ordinal)
+    {
+        // Factories: the callee allocates, the caller destroys.
+        "audio_resampler_create",
+        "config_create",
+        "gs_duplicator_create",
+        "gs_effect_create",
+        "gs_effect_create_from_file",
+        "gs_indexbuffer_create",
+        "gs_samplerstate_create",
+        "gs_pixelshader_create",
+        "gs_pixelshader_create_from_file",
+        "gs_vertexshader_create",
+        "gs_vertexshader_create_from_file",
+        "gs_stagesurface_create",
+        "gs_stagesurface_create_nv12",
+        "gs_stagesurface_create_p010",
+        "gs_swapchain_create",
+        "gs_texrender_create",
+        "gs_timer_create",
+        "gs_timer_range_create",
+        "gs_vertexbuffer_create",
+        "gs_zstencil_create",
+        "gs_render_save",
+        "obs_canvas_create",
+        "obs_canvas_create_private",
+        "obs_data_create",
+        "obs_data_create_from_json",
+        "obs_data_create_from_json_file",
+        "obs_data_create_from_json_file_safe",
+        "obs_data_array_create",
+        "obs_display_create",
+        "obs_audio_encoder_create",
+        "obs_video_encoder_create",
+        "obs_encoder_group_create",
+        "obs_fader_create",
+        "obs_missing_files_create",
+        "obs_output_create",
+        "obs_properties_create",
+        "obs_properties_create_param",
+        "obs_service_create",
+        "obs_service_create_private",
+        "obs_source_create",
+        "obs_source_create_private",
+        "obs_view_create",
+        "obs_volmeter_create",
+        "os_cpu_usage_info_start",
+        "os_inhibit_sleep_create",
+        "os_process_args_create",
+        "proc_handler_create",
+        "profiler_name_store_create",
+        "profile_snapshot_create",
+        "signal_handler_create",
+        "text_lookup_create",
+        "video_output_create_with_frame_rate_divisor",
+        "obs_module_load_locale", // text_lookup_create()'d; the module macro destroys it
+
+        // Deserialization helpers that build a fresh object.
+        "obs_load_source",
+        "obs_load_private_source",
+        "obs_load_canvas",
+        "obs_save_source",
+        "obs_save_canvas",
+        "obs_save_sources",
+        "obs_save_sources_filtered",
+        "obs_hotkey_save",
+        "obs_hotkeys_save_encoder",
+        "obs_hotkeys_save_output",
+        "obs_hotkeys_save_service",
+        "obs_hotkeys_save_source",
+        "obs_sceneitem_transition_save",
+        "obs_scene_save_transform_states",
+        "obs_source_backup_filters",
+
+        // "get by name/uuid", get_ref and the weak<->strong bridges all addref.
+        "obs_get_source_by_name",
+        "obs_get_source_by_uuid",
+        "obs_get_output_source",
+        "obs_get_output_by_name",
+        "obs_get_encoder_by_name",
+        "obs_get_service_by_name",
+        "obs_get_canvas_by_name",
+        "obs_get_canvas_by_uuid",
+        "obs_get_main_canvas",
+        "obs_get_transition_by_name",
+        "obs_get_transition_by_uuid",
+        "obs_get_private_data",
+        "obs_source_get_ref",
+        "obs_source_get_canvas",
+        "obs_source_duplicate",
+        "obs_source_get_filter_by_name",
+        "obs_source_get_missing_files",
+        "obs_canvas_get_ref",
+        "obs_canvas_get_source_by_name",
+        "obs_encoder_get_ref",
+        "obs_output_get_ref",
+        "obs_service_get_ref",
+        "obs_object_get_ref",
+        "obs_transition_get_source",
+        "obs_transition_get_active_source",
+        "obs_canvas_get_weak_canvas",
+        "obs_encoder_get_weak_encoder",
+        "obs_object_get_weak_object",
+        "obs_output_get_weak_output",
+        "obs_service_get_weak_service",
+        "obs_source_get_weak_source",
+        "obs_weak_canvas_get_canvas",
+        "obs_weak_encoder_get_encoder",
+        "obs_weak_object_get_object",
+        "obs_weak_output_get_output",
+        "obs_weak_service_get_service",
+        "obs_weak_source_get_source",
+
+        // Fresh settings/defaults/property copies (data_item_get_* addrefs too).
+        "obs_source_get_settings",
+        "obs_source_get_private_settings",
+        "obs_sceneitem_get_private_settings",
+        "obs_encoder_get_settings",
+        "obs_output_get_settings",
+        "obs_service_get_settings",
+        "obs_encoder_defaults",
+        "obs_encoder_get_defaults",
+        "obs_output_defaults",
+        "obs_service_defaults",
+        "obs_get_source_defaults",
+        "obs_data_get_defaults",
+        "obs_data_get_obj",
+        "obs_data_get_array",
+        "obs_data_get_default_obj",
+        "obs_data_get_default_array",
+        "obs_data_get_autoselect_obj",
+        "obs_data_get_autoselect_array",
+        "obs_data_item_get_obj",
+        "obs_data_item_get_array",
+        "obs_data_item_get_default_obj",
+        "obs_data_item_get_default_array",
+        "obs_data_item_get_autoselect_obj",
+        "obs_data_item_get_autoselect_array",
+        "obs_data_array_item",
+        "obs_source_properties",
+        "obs_encoder_properties",
+        "obs_output_properties",
+        "obs_service_properties",
+        "obs_get_source_properties",
+        "obs_get_encoder_properties",
+        "obs_get_output_properties",
+        "obs_get_service_properties",
+    };
+
+    // `T**` parameters that are pure out-slots handing back a new reference
+    // (same evidence as OwnedReturns). The member exposes them as `out THandle?`
+    // while the helper keeps a raw `ref nint` slot.
+    //
+    // Deliberately absent: the obs_data_item_* set/next/remove family, whose
+    // `obs_data_item_t**` is an in/out slot for a borrowed item rather than an
+    // owned out-param - those keep the raw `ref nint` shape.
+    private static readonly HashSet<string> OwnedOutParams = new(StringComparer.Ordinal)
+    {
+        "audio_output_open",
+        "config_open",
+        "config_open_string",
+        "gs_create",
+        "media_remux_job_create",
+        "obs_hotkey_pair_save",
+        "os_sem_init",
+        "video_output_open",
+        "video_scaler_create",
+    };
+
     private static readonly string[] WrapperFileHeader =
     [
         "// <auto-generated>",
@@ -529,8 +710,8 @@ internal sealed partial class Pipeline
                 var (fnPtrParams, _) = AnalyzeFnPtrs(fn);
                 recv = ClassifyFirstParam(fn, fnPtrParams);
                 classKey = recv is not null ? recv.StructKey
-                    : GroupIsType(gi.Group) ? gi.Group
-                    : "Libobs";
+                    : DoublePointerReceiver(fn) ?? (GroupIsType(gi.Group) ? gi.Group
+                    : "Libobs");
             }
 
             // One dedupe set per extension class; the raw C name is reserved so a
@@ -693,7 +874,8 @@ internal sealed partial class Pipeline
         }
 
         var bt = mp.Groups[1].Value;
-        if (_handleClassByStruct.TryGetValue(bt, out var hc))
+        if (!p.CsType.EndsWith("**", StringComparison.Ordinal)
+            && _handleClassByStruct.TryGetValue(bt, out var hc))
         {
             return new FirstParamReceiver(bt, $"{hc}? self", false);
         }
@@ -717,6 +899,38 @@ internal sealed partial class Pipeline
         }
 
         return null;
+    }
+
+    // A `T**` first parameter (T an opaque handle type) cannot become an
+    // extension receiver - the callee writes through the slot - but the member
+    // still belongs on T's extension class rather than the prefix group's.
+    private string? DoublePointerReceiver(ParsedFunction fn)
+    {
+        if (fn.Params.Count == 0)
+        {
+            return null;
+        }
+
+        var p = fn.Params[0];
+        if (!p.CsType.EndsWith("**", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var mp = PointerTypeRegex.Match(p.CsType);
+        return mp.Success && _handleClassByStruct.ContainsKey(mp.Groups[1].Value) ? mp.Groups[1].Value : null;
+    }
+
+    // `T**` where T is an opaque type with a generated SafeHandle, else null.
+    private string? DoublePointerHandleClass(ParsedParam p)
+    {
+        if (!p.CsType.EndsWith("**", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var mp = PointerTypeRegex.Match(p.CsType);
+        return mp.Success && _handleClassByStruct.TryGetValue(mp.Groups[1].Value, out var hc) ? hc : null;
     }
 
     // A single-level pointer to a BCL-replaced struct (System.Numerics.*).
@@ -787,6 +1001,20 @@ internal sealed partial class Pipeline
             retAttr = fn.RetNative is not null ? $"[return: NativeTypeName(\"{fn.RetNative}\")]" : null;
         }
 
+        // An owned pointer return is exposed as a SafeHandle on the member; the
+        // private helper keeps the raw pointer shape (see OwnedReturns).
+        var retBase = PointerTypeRegex.Match(retSig);
+        string? ownedHandle = null;
+        if (retSig == fn.RetType
+            && retBase.Success
+            && _handleClassByStruct.TryGetValue(retBase.Groups[1].Value, out var ownedHc)
+            && OwnedReturns.Contains(fn.Name))
+        {
+            ownedHandle = ownedHc;
+        }
+
+        var memberRetSig = ownedHandle is null ? retSig : ownedHandle + "?";
+
         if (retAttr is not null)
         {
             helperAttrs.Add(retAttr);
@@ -806,6 +1034,8 @@ internal sealed partial class Pipeline
         var memberParams = new List<string>();
         var callArgs = new List<string>();
         var fixedLines = new List<string>();
+        var outLocals = new List<string>();
+        var outAssigns = new List<string>();
         if (recv is not null)
         {
             if (recv.BlockReceiver.Contains('.'))
@@ -826,6 +1056,21 @@ internal sealed partial class Pipeline
         for (var i = 0; i < fn.Params.Count; i++)
         {
             var p = fn.Params[i];
+
+            // Verified owned out-param: hand the caller a SafeHandle while the
+            // helper keeps the raw `T**` slot (see OwnedOutParams).
+            var outHcls = OwnedOutParams.Contains(fn.Name) ? DoublePointerHandleClass(p) : null;
+            if (outHcls is not null)
+            {
+                outLocals.Add($"                nint __out_{p.Name} = 0;");
+                outAssigns.Add(
+                    $"                {p.Name} = __out_{p.Name} == 0 ? null : {outHcls}.FromOwned(__out_{p.Name});");
+                helperParams.Add($"ref nint {p.Name}");
+                memberParams.Add($"out {outHcls}? {p.Name}");
+                callArgs.Add($"ref __out_{p.Name}");
+                continue;
+            }
+
             var external = IsExternalStructParam(p);
             var (helperText, _) = RenderParam(fn, p, useLibraryImport, fnPtrParams, method, includeMarshalAs: true, forMember: false);
             helperParams.Add(helperText);
@@ -852,7 +1097,9 @@ internal sealed partial class Pipeline
         }
 
         var memberAttrs = new List<string>();
-        if (retAttr is not null && retAttr.StartsWith("[return: NativeTypeName", StringComparison.Ordinal))
+        if (ownedHandle is null
+            && retAttr is not null
+            && retAttr.StartsWith("[return: NativeTypeName", StringComparison.Ordinal))
         {
             memberAttrs.Add(retAttr);
         }
@@ -862,23 +1109,50 @@ internal sealed partial class Pipeline
             memberAttrs.Add("[Obsolete]");
         }
 
+        if (fixedLines.Count > 0 && outLocals.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"{fn.Name}: BCL in/ref pinning cannot be combined with owned out-params; extend BuildNativeEntry.");
+        }
+
         var helperDeclKw = useLibraryImport ? "private static partial " : "private static extern ";
         var memberDeclKw = recv is null ? "public static " : "public "; // unnamed receiver = static members
-        var call = fn.Name + "(" + string.Join(", ", callArgs) + ");";
-        var memberSig = memberDeclKw + retSig + " " + method + "(" + string.Join(", ", memberParams) + ")";
+        var call = fn.Name + "(" + string.Join(", ", callArgs) + ")";
+        if (ownedHandle is not null)
+        {
+            // Adopt the new reference the native call handed us, so the caller
+            // never has to touch the raw pointer.
+            call = $"{ownedHandle}.FromOwned((nint){call})";
+        }
+
+        call += ";";
+        var memberSig = memberDeclKw + memberRetSig + " " + method + "(" + string.Join(", ", memberParams) + ")";
         List<string>? memberBody = null;
-        if (fixedLines.Count == 0)
+        if (fixedLines.Count == 0 && outLocals.Count == 0)
         {
             memberSig += " => " + call; // no pinning needed: expression body as before
         }
-        else
+        else if (fixedLines.Count > 0)
         {
             // fixed chains pin every BCL in/ref argument for the helper call.
             memberBody = [.. fixedLines, "                {"];
-            memberBody.Add(retSig == "void"
+            memberBody.Add(memberRetSig == "void"
                 ? "                    " + call
                 : "                    return " + call);
             memberBody.Add("                }");
+        }
+        else
+        {
+            // Owned out-params: call into a raw local slot, then wrap it.
+            memberBody = [.. outLocals];
+            memberBody.Add(memberRetSig == "void"
+                ? "                " + call
+                : "                var __ret = " + call);
+            memberBody.AddRange(outAssigns);
+            if (memberRetSig != "void")
+            {
+                memberBody.Add("                return __ret;");
+            }
         }
 
         return new ExtensionFn(
@@ -955,6 +1229,13 @@ internal sealed partial class Pipeline
 
         if (hcls is not null)
         {
+            if (p.CsType.EndsWith("**", StringComparison.Ordinal))
+            {
+                // A pointer to a pointer is a slot the callee may write through;
+                // a SafeHandle cannot stand in for it, so keep it raw.
+                return ($"ref nint {p.Name}", true);
+            }
+
             // Owning handle: pass the SafeHandle so lifetime is managed.
             return ($"{hcls}? {p.Name}", false);
         }
