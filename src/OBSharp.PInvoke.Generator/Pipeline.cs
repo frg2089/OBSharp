@@ -6,13 +6,12 @@ namespace OBSharp.PInvoke.Generator;
 
 /// <summary>
 ///     Regenerates the P/Invoke bindings and the friendly wrapper layer for libobs.
-///     Translation of scripts/Generate-PInvoke.ps1; the pipeline stages are:
-///     1. ClangSharpPInvokeGenerator parses src/OBSharp.PInvoke/clang-shim/obs_all.h
-///        (umbrella header) and emits raw bindings into a staging directory under
-///        the system temp folder (nothing is written into the repo except
-///        Generated/). A first probe pass with '--log visited-files' discovers
-///        every repo header that is actually parsed, so the real pass can
-///        traverse all of them.
+///     The pipeline stages are:
+///     1. ClangSharpPInvokeGenerator parses an umbrella header that this stage
+///        writes into the staging directory (system temp folder) at run time, so
+///        the repo stays pure C#, and emits raw bindings next to it. A first probe
+///        pass with '--log visited-files' discovers every repo header that is
+///        actually parsed, so the real pass can traverse all of them.
 ///     2. Raw .cs files are copied into src/OBSharp.PInvoke/Generated/Raw/
 ///        (namespace OBSharp.PInvoke), normalized for idiomatic C# and converted
 ///        to LibraryImport where the source generator can marshal them.
@@ -33,8 +32,9 @@ internal sealed partial class Pipeline
     public bool SkipRaw { get; set; }
     public bool SkipBuild { get; set; }
 
-    // ClangSharp scratch output lives in the system temp folder; the only place
-    // this pipeline writes inside the repo is src/OBSharp.PInvoke/Generated.
+    // ClangSharp scratch output (including the generated C headers) lives in the
+    // system temp folder; the only place this pipeline writes inside the repo is
+    // src/OBSharp.PInvoke/Generated.
     private readonly string _repoRoot;
     private readonly string _stagingDir;
     private readonly string _shimDir;
@@ -47,7 +47,7 @@ internal sealed partial class Pipeline
     {
         _repoRoot = repoRoot;
         _stagingDir = Path.Combine(Path.GetTempPath(), "OBSharp-pinvoke-staging");
-        _shimDir = Path.Combine(repoRoot, "src", "OBSharp.PInvoke", "clang-shim");
+        _shimDir = Path.Combine(_stagingDir, "clang-shim");
         _genRoot = Path.Combine(repoRoot, "src", "OBSharp.PInvoke", "Generated");
         _rawOutDir = Path.Combine(_genRoot, "Raw");
         _wrapperOutDir = Path.Combine(_genRoot, "Wrappers");
