@@ -255,6 +255,18 @@ internal sealed partial class Pipeline
         return string.Concat(parts);
     }
 
+    // Function name of a ClangSharp extern line, e.g.
+    // `public static extern byte* obs_frontend_get_current_profile();` -> the
+    // identifier right before the parameter list. Return types never contain a
+    // '(' (fn-pointer returns are spelled `delegate* unmanaged[Cdecl]<...>` and
+    // [NativeTypeName] attributes go on their own line), so the first '(' in the
+    // line opens the parameter list.
+    private static string ExternName(string externLine)
+    {
+        var m = ExternNameRegex.Match(externLine);
+        return m.Success ? m.Groups[1].Value : string.Empty;
+    }
+
     // Convert ClangSharp externs to LibraryImport partials. Only methods the AOT
     // source generator can marshal (no fn pointers, no variadics) are converted;
     // the rest keep DllImport - delegate* and __arglist are not marshalable.
@@ -297,11 +309,20 @@ internal sealed partial class Pipeline
                 {
                     // ExactSpelling externs use the method name as entry point; the
                     // LibraryImport default matches, so no EntryPoint= is needed.
-                    output.Add(ind + "[LibraryImport(\"obs\")]");
+                    output.Add(ind + $"[LibraryImport(\"{LibraryNameFor(ExternName(lines[declIdx]))}\")]");
                     output.Add(ind + "[UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]");
                     declIdxs.Add(declIdx);
                     converted++;
                     continue;
+                }
+
+                // Stays DllImport (fn pointer / variadic shape) but still has to
+                // name the right module.
+                if (declIdx >= 0)
+                {
+                    ln = ln.Replace(
+                        "[DllImport(\"" + DefaultLibraryName + "\"",
+                        "[DllImport(\"" + LibraryNameFor(ExternName(lines[declIdx])) + "\"");
                 }
             }
 
@@ -526,6 +547,9 @@ internal sealed partial class Pipeline
     [GeneratedRegex(
         @"^(\s*)\[DllImport\(""obs"", CallingConvention = CallingConvention\.Cdecl, ExactSpelling = true\)\]\s*$")]
     private static partial Regex DllImportAttrRegex { get; }
+
+    [GeneratedRegex(@"^\s*public static extern .*?([A-Za-z_]\w*)\s*\(")]
+    private static partial Regex ExternNameRegex { get; }
 
     [GeneratedRegex(@"using System\.Runtime\.CompilerServices;")]
     private static partial Regex CompilerServicesUsingRegex { get; }

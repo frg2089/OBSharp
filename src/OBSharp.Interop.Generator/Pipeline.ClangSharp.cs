@@ -7,6 +7,7 @@ internal sealed partial class Pipeline
 {
     private const string LibobsDir = "lib/obs-studio/libobs";
     private const string PthreadDir = "lib/obs-studio/deps/w32-pthreads";
+    private const string FrontendApiDir = "lib/obs-studio/frontend/api";
 
     // The umbrella header and the obsconfig.h stand-in are written into the
     // staging directory on every run instead of being checked in, so the repo
@@ -50,6 +51,10 @@ internal sealed partial class Pipeline
         #include <media-io/video-scaler.h>
         #include <media-io/media-remux.h>
         #include <media-io/format-conversion.h>
+
+        /* Frontend API. Lives in its own shared library (obs-frontend-api.dll),
+         * so those entry points name it instead of obs (see LibraryNameFor). */
+        #include <obs-frontend-api.h>
 
         /* Utility helpers worth binding. */
         #include <util/config-file.h>
@@ -118,7 +123,7 @@ internal sealed partial class Pipeline
 
         Console.WriteLine("==> Probing parsed headers...");
         var probeLog = Path.Combine(_stagingDir, "visited-files.log");
-        InvokeClangSharp([LibobsDir + "/obs.h"], _stagingDir, probeLog);
+        InvokeClangSharp([LibobsDir + "/obs.h", FrontendApiDir + "/obs-frontend-api.h"], _stagingDir, probeLog);
         var traverse = GetVisitedHeaders(probeLog);
         Console.WriteLine($"    {traverse.Count} headers discovered");
 
@@ -142,6 +147,7 @@ internal sealed partial class Pipeline
             "-F", _shimDir,
             "-I", LibobsDir.Replace('/', '\\'),
             "-I", PthreadDir.Replace('/', '\\'),
+            "-I", FrontendApiDir.Replace('/', '\\'),
             "-I", _shimDir,
             "-o", outDir,
             "-n", "OBSharp.Interop",
@@ -152,7 +158,7 @@ internal sealed partial class Pipeline
             // suppress it (editorconfig severities are not applied to generated trees).
             "-m", MethodClassName,
             "-x", "c",
-            "-l", "obs",
+            "-l", DefaultLibraryName,
             "--generate", "funcs-with-body=false",
             "--generate", "helper-types",
             "--config", "file=multi",

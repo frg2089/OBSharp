@@ -24,6 +24,11 @@ internal sealed partial class Pipeline
         ("obs_canvas_", "ObsCanvas"),
         ("obs_scene_", "ObsScene"),
         ("obs_module_", "ObsModule"),
+        // The C API has no obs_frontend_t, so the members stay on the Obs module
+        // class (ObsExtensions) instead of a dedicated container. The entry is
+        // still needed: it strips "frontend_" for the member names, giving
+        // StreamingStart()/GetCurrentScene() rather than FrontendStreamingStart().
+        ("obs_frontend_", "ObsFrontend"),
         ("obs_missing_", "ObsMissingFiles"),
         ("obs_fader_", "ObsFader"),
         ("obs_display_", "ObsDisplay"),
@@ -257,6 +262,21 @@ internal sealed partial class Pipeline
         "obs_get_encoder_properties",
         "obs_get_output_properties",
         "obs_get_service_properties",
+
+        // Frontend API (obs-frontend-api). The object getters hand back a new
+        // reference - frontend/OBSStudioAPI.cpp wraps every return in
+        // obs_source_get_ref / obs_output_get_ref / obs_canvas_get_ref - while the
+        // config_t accessors (get_profile_config / get_app_config / get_user_config
+        // / get_global_config) and get_streaming_service return borrowed pointers,
+        // so they stay raw.
+        "obs_frontend_get_current_scene",
+        "obs_frontend_get_current_transition",
+        "obs_frontend_get_current_preview_scene",
+        "obs_frontend_get_streaming_output",
+        "obs_frontend_get_recording_output",
+        "obs_frontend_get_replay_buffer_output",
+        "obs_frontend_get_virtualcam_output",
+        "obs_frontend_add_canvas",
     };
 
     // `T**` parameters that are pure out-slots handing back a new reference
@@ -967,13 +987,13 @@ internal sealed partial class Pipeline
         if (useLibraryImport)
         {
             helperAttrs.Add(hasStringParam
-                ? $"[LibraryImport(\"obs\", EntryPoint = \"{fn.Name}\", StringMarshalling = StringMarshalling.Utf8)]"
-                : $"[LibraryImport(\"obs\", EntryPoint = \"{fn.Name}\")]");
+                ? $"[LibraryImport(\"{LibraryNameFor(fn.Name)}\", EntryPoint = \"{fn.Name}\", StringMarshalling = StringMarshalling.Utf8)]"
+                : $"[LibraryImport(\"{LibraryNameFor(fn.Name)}\", EntryPoint = \"{fn.Name}\")]");
         }
         else
         {
             helperAttrs.Add(
-                $"[DllImport(\"obs\", EntryPoint = \"{fn.Name}\", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]");
+                $"[DllImport(\"{LibraryNameFor(fn.Name)}\", EntryPoint = \"{fn.Name}\", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]");
         }
 
         string retSig;
@@ -1509,7 +1529,7 @@ internal sealed partial class Pipeline
             lines.Add("            return true;");
             lines.Add("        }");
             lines.Add(string.Empty);
-            lines.Add($"        [LibraryImport(\"obs\", EntryPoint = \"{h.ReleaseFn}\")]");
+            lines.Add($"        [LibraryImport(\"{LibraryNameFor(h.ReleaseFn)}\", EntryPoint = \"{h.ReleaseFn}\")]");
             lines.Add("        [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]");
             if (h.PtrPtr)
             {

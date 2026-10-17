@@ -45,6 +45,21 @@ internal sealed partial class Pipeline
     // its signatures to build the friendly layer, so the name lives here once.
     internal const string MethodClassName = "Obs";
 
+    // ClangSharp's `-l` applies a single module name to the whole pass, but the
+    // frontend API ships in its own shared library (obs-frontend-api.dll /
+    // libobs-frontend-api.so), so the raw and wrapper emitters resolve the module
+    // name per function. Every function in frontend/api/obs-frontend-api.h is
+    // prefixed obs_frontend_ and no libobs/deps header declares one (verified),
+    // which makes the prefix a sound discriminator.
+    internal const string DefaultLibraryName = "obs";
+    internal const string FrontendLibraryName = "obs-frontend-api";
+    private const string FrontendFnPrefix = "obs_frontend_";
+
+    internal static string LibraryNameFor(string functionName) =>
+        functionName.StartsWith(FrontendFnPrefix, StringComparison.Ordinal)
+            ? FrontendLibraryName
+            : DefaultLibraryName;
+
     // ClangSharp scratch output (including the generated C headers) lives in the
     // system temp folder; the only place this pipeline writes inside the repo is
     // src/OBSharp.Interop/Generated.
