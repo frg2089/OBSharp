@@ -125,7 +125,7 @@ internal sealed partial class Pipeline
         Console.WriteLine("==> Generating raw bindings...");
         InvokeClangSharp(traverse, _stagingDir, logFile: null);
         var fnCount = ExternDeclCountRegex.Matches(
-                File.ReadAllText(Path.Combine(_stagingDir, "Libobs.cs")))
+                File.ReadAllText(Path.Combine(_stagingDir, MethodClassName + ".cs")))
             .Count;
         var fileCount = Directory.GetFiles(_stagingDir, "*.cs").Length;
         Console.WriteLine($"    {fnCount} functions, {fileCount} files");
@@ -150,7 +150,7 @@ internal sealed partial class Pipeline
             // cannot carry #pragma directives - a lowercase 'libobs' there triggers
             // CS8981 (lowercase type name) once per raw binding with no way to
             // suppress it (editorconfig severities are not applied to generated trees).
-            "-m", "Libobs",
+            "-m", MethodClassName,
             "-x", "c",
             "-l", "obs",
             "--generate", "funcs-with-body=false",
