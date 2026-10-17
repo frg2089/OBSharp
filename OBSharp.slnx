@@ -10,6 +10,7 @@
     <File Path="nuget.config" />
   </Folder>
   <Folder Name="/src/">
+    <Project Path="src/OBSharp.PInvoke.Generator/OBSharp.PInvoke.Generator.csproj" />
     <Project Path="src/OBSharp.PInvoke/OBSharp.PInvoke.csproj" />
   </Folder>
   <Project Path="src/OBSharp.Loader/OBSharp.Loader.csproj" />

@@ -1,0 +1,247 @@
+using System.Diagnostics;
+using System.Text;
+
+namespace OBSharp.PInvoke.Generator;
+
+/// <summary>
+///     Regenerates the P/Invoke bindings and the friendly wrapper layer for libobs.
+///     Translation of scripts/Generate-PInvoke.ps1; the pipeline stages are:
+///     1. ClangSharpPInvokeGenerator parses src/OBSharp.PInvoke/clang-shim/obs_all.h
+///        (umbrella header) and emits raw bindings into a staging directory under
+///        the system temp folder (nothing is written into the repo except
+///        Generated/). A first probe pass with '--log visited-files' discovers
+///        every repo header that is actually parsed, so the real pass can
+///        traverse all of them.
+///     2. Raw .cs files are copied into src/OBSharp.PInvoke/Generated/Raw/
+///        (namespace OBSharp.PInvoke), normalized for idiomatic C# and converted
+///        to LibraryImport where the source generator can marshal them.
+///     3. The raw function signatures in Libobs.cs are parsed and a friendly
+///        wrapper layer is emitted:
+///          - Generated/Wrappers/*.cs  -> prefix-grouped static classes with
+///            PascalCase names, string/bool marshalling and SafeHandle parameters.
+///          - Generated/Handles/*.cs   -> SafeHandle subclasses per owning handle
+///            type (release function auto-detected).
+///     4. dotnet build is run; missing system-header types (FILE, stat, timespec,
+///        __m128, ...) reported by the compiler are shimmed into
+///        Generated/Raw/Compat.cs and the build is retried.
+///     Everything under src/OBSharp.PInvoke/Generated is fully regenerated on each
+///     run; no manual edits live there.
+/// </summary>
+internal sealed partial class Pipeline
+{
+    public bool SkipRaw { get; set; }
+    public bool SkipBuild { get; set; }
+
+    // ClangSharp scratch output lives in the system temp folder; the only place
+    // this pipeline writes inside the repo is src/OBSharp.PInvoke/Generated.
+    private readonly string _repoRoot;
+    private readonly string _stagingDir;
+    private readonly string _shimDir;
+    private readonly string _genRoot;
+    private readonly string _rawOutDir;
+    private readonly string _wrapperOutDir;
+    private readonly string _handleOutDir;
+
+    public Pipeline(string repoRoot)
+    {
+        _repoRoot = repoRoot;
+        _stagingDir = Path.Combine(Path.GetTempPath(), "OBSharp-pinvoke-staging");
+        _shimDir = Path.Combine(repoRoot, "src", "OBSharp.PInvoke", "clang-shim");
+        _genRoot = Path.Combine(repoRoot, "src", "OBSharp.PInvoke", "Generated");
+        _rawOutDir = Path.Combine(_genRoot, "Raw");
+        _wrapperOutDir = Path.Combine(_genRoot, "Wrappers");
+        _handleOutDir = Path.Combine(_genRoot, "Handles");
+    }
+
+    public void Run()
+    {
+        if (!SkipRaw)
+        {
+            RunClangSharpStage();
+        }
+        else if (!File.Exists(Path.Combine(_stagingDir, "Libobs.cs")))
+        {
+            throw new InvalidOperationException($"Staging output missing ({_stagingDir}); rerun without -SkipRaw.");
+        }
+
+        PublishRawStage();
+        GenerateWrappersStage();
+
+        if (SkipBuild)
+        {
+            Console.WriteLine("==> Skipping build verification (-SkipBuild)");
+            return;
+        }
+
+        VerifyBuildStage();
+        Console.WriteLine("==> Done.");
+    }
+
+    // PascalCase per snake_case segment; the remainder of each token is kept
+    // verbatim (obs_data -> ObsData, vec2 -> Vec2).
+    internal static string GetPascalName(string name)
+    {
+        var sb = new StringBuilder();
+        foreach (var token in name.Split('_'))
+        {
+            if (token.Length == 0)
+            {
+                continue;
+            }
+
+            sb.Append(char.ToUpperInvariant(token[0]));
+            sb.Append(token, 1, token.Length - 1);
+        }
+
+        return sb.ToString();
+    }
+
+    // Depth-aware top-level comma split (generic args, attribute brackets, parens).
+    internal static List<string> SplitTypeArgs(string text)
+    {
+        var parts = new List<string>();
+        var depth = 0;
+        var cur = new StringBuilder();
+        foreach (var c in text)
+        {
+            if (c is '<' or '[' or '(')
+            {
+                depth++;
+            }
+            else if (c is '>' or ']' or ')')
+            {
+                depth--;
+            }
+
+            if (c == ',' && depth == 0)
+            {
+                parts.Add(cur.ToString());
+                cur.Clear();
+            }
+            else
+            {
+                cur.Append(c);
+            }
+        }
+
+        parts.Add(cur.ToString());
+        for (var i = 0; i < parts.Count; i++)
+        {
+            parts[i] = parts[i].Trim();
+        }
+
+        return parts;
+    }
+
+    private static void TrimTrailingEmpty(List<string> lines)
+    {
+        while (lines.Count > 0 && lines[^1].Length == 0)
+        {
+            lines.RemoveAt(lines.Count - 1);
+        }
+    }
+
+    // Runs a child process with merged stdout/stderr captured as UTF-8 (dotnet
+    // writes UTF-8 to redirected pipes regardless of the console codepage);
+    // optionally echoes lines live. Returns exit code + every output line.
+    private static (int ExitCode, List<string> Lines) RunProcess(
+        string fileName, IEnumerable<string> args, string workingDir, bool echo)
+    {
+        var psi = new ProcessStartInfo(fileName)
+        {
+            WorkingDirectory = workingDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            StandardOutputEncoding = new UTF8Encoding(false),
+            StandardErrorEncoding = new UTF8Encoding(false),
+        };
+        foreach (var a in args)
+        {
+            psi.ArgumentList.Add(a);
+        }
+
+        var lines = new List<string>();
+        var sync = new object();
+        using var proc = new Process { StartInfo = psi };
+        proc.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data is null)
+            {
+                return;
+            }
+
+            lock (sync)
+            {
+                lines.Add(e.Data);
+            }
+
+            if (echo)
+            {
+                Console.WriteLine(e.Data);
+            }
+        };
+        proc.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is null)
+            {
+                return;
+            }
+
+            lock (sync)
+            {
+                lines.Add(e.Data);
+            }
+
+            if (echo)
+            {
+                Console.WriteLine(e.Data);
+            }
+        };
+        proc.Start();
+        proc.BeginOutputReadLine();
+        proc.BeginErrorReadLine();
+        proc.WaitForExit();
+        return (proc.ExitCode, lines);
+    }
+}
+
+internal sealed record ParsedParam(string? Native, string CsType, string Name, string Text);
+
+internal sealed record ParsedFunction(
+    string Name,
+    string RetType,
+    string? RetNative,
+    bool Obsolete,
+    List<ParsedParam> Params);
+
+internal sealed record GroupInfo(string Group, string Rest, string Prefix);
+
+// First parameter promoted to an extension receiver: StructKey places the entry
+// in the type's extension class, BlockReceiver is the text inside
+// extension(...), ForwardRef says whether the helper call needs `ref self`.
+internal sealed record FirstParamReceiver(string StructKey, string BlockReceiver, bool ForwardRef);
+
+// One wrapped function: an optional private P/Invoke helper sibling plus the
+// public extension member that forwards to it (helpers are required because
+// extension members cannot be partial - CS0751/SYSLIB1050).
+internal sealed record ExtensionFn(
+    List<string>? HelperAttrs,
+    string? HelperSig,
+    string BlockReceiver,
+    List<string> MemberAttrs,
+    string MemberSig,
+    List<string>? MemberBody);
+
+internal sealed class HandleInfo
+{
+    public required string StructName { get; init; }
+
+    public required string Class { get; init; }
+
+    public required string ReleaseFn { get; init; }
+
+    public required bool PtrPtr { get; init; }
+
+    public required ParsedParam Param { get; init; }
+}
