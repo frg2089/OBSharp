@@ -24,10 +24,11 @@ internal sealed partial class Pipeline
         ("obs_canvas_", "ObsCanvas"),
         ("obs_scene_", "ObsScene"),
         ("obs_module_", "ObsModule"),
-        // The C API has no obs_frontend_t, so the members stay on the Obs module
-        // class (ObsExtensions) instead of a dedicated container. The entry is
-        // still needed: it strips "frontend_" for the member names, giving
-        // StreamingStart()/GetCurrentScene() rather than FrontendStreamingStart().
+        // The C API has no obs_frontend_t, so the group gets a container class of
+        // its own (see IsContainerGroup) instead of piling onto the module class:
+        // ObsFrontend.StreamingStart(), not Obs.StreamingStart(). The entry also
+        // strips "frontend_" for the member names, so it is StreamingStart()
+        // rather than FrontendStreamingStart().
         ("obs_frontend_", "ObsFrontend"),
         ("obs_missing_", "ObsMissingFiles"),
         ("obs_fader_", "ObsFader"),
@@ -318,6 +319,8 @@ internal sealed partial class Pipeline
     private readonly Dictionary<string, HandleInfo> _consumeByFn = new(StringComparer.Ordinal);
     private readonly HashSet<string> _excluded = new(StringComparer.Ordinal);
     private readonly Dictionary<string, bool> _declHasContent = new(StringComparer.Ordinal);
+    // Group keys that get a plain container class instead of an extension class.
+    private readonly HashSet<string> _containerKeys = new(StringComparer.Ordinal);
 
     // Fn-pointer delegate registry: LibraryImport cannot marshal
     // delegate* unmanaged[Cdecl]<...>; single-level fn-pointer params become
@@ -348,7 +351,7 @@ internal sealed partial class Pipeline
         EmitHandles();
 
         Console.WriteLine(
-            $"    {_wrapperCount} wrapper members in {_classOrder.Count} extension classes, {_handleMap.Count} handle classes, {_delegateArgs.Count} callback delegates");
+            $"    {_wrapperCount} wrapper members in {_classOrder.Count} wrapper classes, {_handleMap.Count} handle classes, {_delegateArgs.Count} callback delegates");
     }
 
     // --- 3a. parse every extern signature in Raw/Obs.cs ---------------------
@@ -612,6 +615,16 @@ internal sealed partial class Pipeline
             _usedDelegateNames.Add(pg.Group + "Extensions"); // extension container classes
         }
 
+        // Groups that get a container class are named after the group itself, so
+        // their name has to stay free for the class and cannot name a delegate.
+        foreach (var g in _prefixGroups.Select(p => p.Group).Append(DefaultGroup).Concat(ExactGroups.Values))
+        {
+            if (IsContainerGroup(g))
+            {
+                _usedDelegateNames.Add(g);
+            }
+        }
+
         foreach (var n in _declHasContent.Keys)
         {
             _usedDelegateNames.Add(n + "Extensions");
@@ -664,8 +677,9 @@ internal sealed partial class Pipeline
     // --- 3c. shape every function as an extension member ----------------------
     // Instance fns (first param renders as `in T`/`ref T` or an owning handle)
     // become instance extension members (ptr->Method() / handle.Method()); the
-    // rest become static members either on their prefix's type (Type.Method())
-    // or - when the group is not a type - on the Obs module class.
+    // rest become static members on their group's class - the backing type's
+    // extension class, a container class (see IsContainerGroup), or the Obs
+    // module class for "obs_" itself.
     private void GroupFunctions()
     {
         // Hand-written blog()/Log() pair lives on the Obs module class.
@@ -714,7 +728,7 @@ internal sealed partial class Pipeline
                 {
                     // ref receivers are value-type-only (CS9300), so a ptr-ptr
                     // release disposes through a static member on the type.
-                    classKey = GroupIsType(gi.Group) ? gi.Group : MethodClassName;
+                    classKey = GroupKeyFor(gi.Group);
                 }
                 else
                 {
@@ -728,8 +742,7 @@ internal sealed partial class Pipeline
                 var (fnPtrParams, _) = AnalyzeFnPtrs(fn);
                 recv = ClassifyFirstParam(fn, fnPtrParams);
                 classKey = recv is not null ? recv.StructKey
-                    : DoublePointerReceiver(fn) ?? (GroupIsType(gi.Group) ? gi.Group
-                    : MethodClassName);
+                    : DoublePointerReceiver(fn) ?? GroupKeyFor(gi.Group);
             }
 
             // One dedupe set per extension class; the raw C name is reserved so a
@@ -822,6 +835,34 @@ internal sealed partial class Pipeline
     // Static members land on the prefix's type only when that name really is a
     // declared struct/enum (Graphics, Os, Base, ... are not).
     private bool GroupIsType(string group) => _pascalNames.Contains(group);
+
+    // Receiver-less members go to their own group's class: when the group name is
+    // a declared type that is the type's extension class ({Type}Extensions +
+    // extension(T self)), otherwise the group gets a plain container class named
+    // after it. The "obs_" group is the module class - ClangSharp's raw
+    // declarations live there - so its members stay extension members on it
+    // instead of turning into a container.
+    private bool IsContainerGroup(string group) => group != MethodClassName && !GroupIsType(group);
+
+    // Resolve a group to its class key, remembering whether it is a container.
+    private string GroupKeyFor(string group)
+    {
+        if (IsContainerGroup(group))
+        {
+            _containerKeys.Add(group);
+        }
+
+        return group;
+    }
+
+    // Container classes are named after their group ("ObsFrontend"); everything
+    // else is an extension container ("ObsSourceExtensions").
+    private string WrapperClassName(string key) => _containerKeys.Contains(key) ? key : key + "Extensions";
+
+    // A container member sits one level shallower than an extension member while
+    // the member bodies are pre-indented for the extension case.
+    private static string Deindent(string line) =>
+        line.StartsWith("    ", StringComparison.Ordinal) ? line[4..] : line;
 
     // Shared fn-pointer analysis: which delegate* params are cdecl-compatible and
     // whether the AOT source generator can marshal this signature at all.
@@ -1344,8 +1385,10 @@ internal sealed partial class Pipeline
     }
 
     // --- 3d. emit Wrappers/*.cs ----------------------------------------------
-    // One file per extension class: P/Invoke helper siblings first, then the
-    // extension blocks (one per receiver) that forward to them.
+    // One file per wrapper class: P/Invoke helper siblings first, then the
+    // extension blocks (one per receiver) that forward to them. Container
+    // classes (see IsContainerGroup) skip the extension block and hold their
+    // members directly.
     private void EmitWrappers()
     {
         if (Directory.Exists(_wrapperOutDir))
@@ -1358,7 +1401,8 @@ internal sealed partial class Pipeline
         foreach (var key in _classOrder)
         {
             var lines = new List<string>(WrapperFileHeader);
-            lines.Add($"    public static unsafe partial class {key}Extensions");
+            var container = _containerKeys.Contains(key);
+            lines.Add($"    public static unsafe partial class {WrapperClassName(key)}");
             lines.Add("    {");
             var needSep = false;
 
@@ -1384,17 +1428,30 @@ internal sealed partial class Pipeline
                 lines.Add("        " + fn.HelperSig);
             }
 
-            // 2) extension blocks, one per receiver, in first-use order.
+            // 2) extension blocks, one per receiver, in first-use order; a
+            //    container has no receiver, so its members sit in the class
+            //    body one level shallower.
             foreach (var block in _classFns[key].GroupBy(f => f.BlockReceiver))
             {
+                if (container && block.Key != key)
+                {
+                    throw new InvalidOperationException(
+                        $"{key}: container member grouped under receiver {block.Key}.");
+                }
+
                 if (needSep)
                 {
                     lines.Add(string.Empty);
                 }
 
                 needSep = true;
-                lines.Add($"        extension({block.Key})");
-                lines.Add("        {");
+                var indent = container ? "        " : "            ";
+                if (!container)
+                {
+                    lines.Add($"        extension({block.Key})");
+                    lines.Add("        {");
+                }
+
                 var firstMember = true;
                 foreach (var fn in block)
                 {
@@ -1406,25 +1463,30 @@ internal sealed partial class Pipeline
                     firstMember = false;
                     foreach (var a in fn.MemberAttrs)
                     {
-                        lines.Add("            " + a);
+                        lines.Add(indent + a);
                     }
 
-                    lines.Add("            " + fn.MemberSig);
+                    lines.Add(indent + fn.MemberSig);
                     if (fn.MemberBody is not null)
                     {
-                        lines.Add("            {");
-                        lines.AddRange(fn.MemberBody);
-                        lines.Add("            }");
+                        lines.Add(indent + "{");
+                        lines.AddRange(container
+                            ? fn.MemberBody.Select(Deindent)
+                            : fn.MemberBody);
+                        lines.Add(indent + "}");
                     }
                 }
 
-                lines.Add("        }");
+                if (!container)
+                {
+                    lines.Add("        }");
+                }
             }
 
             TrimTrailingEmpty(lines);
             lines.Add("    }");
             lines.Add("}");
-            WriteWrapperFile(Path.Combine(_wrapperOutDir, key + "Extensions.cs"), lines);
+            WriteWrapperFile(Path.Combine(_wrapperOutDir, WrapperClassName(key) + ".cs"), lines);
         }
 
         EmitCallbacks();
