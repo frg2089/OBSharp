@@ -4,7 +4,7 @@ using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-using ObsInterop;
+using OBSharp.Interop;
 
 namespace OBSharp.Runtime;
 
@@ -13,7 +13,7 @@ internal sealed unsafe partial class OBSharpHost(
     IOptions<OBSharpHostOptions> options,
     ILogger<OBSharpHost> logger) : IDataFolderProvider, IRuntimeInfoProvider
 {
-    private obs_module* _obs_module_pointer;
+    private ObsModule* _obs_module_pointer;
     public OBSharpHostOptions Options => options.Value;
 
     public bool UseAspNet => Options.UseAspNet;
@@ -21,7 +21,7 @@ internal sealed unsafe partial class OBSharpHost(
 
     public string GetDataFolder(string name) => Path.Combine(Options.ContentPath, name);
 
-    public void SetPointer(obs_module* module)
+    public void SetPointer(ObsModule* module)
     {
         try
         {

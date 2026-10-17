@@ -5,7 +5,7 @@ using System.Text;
 
 using OBSharp.Runtime;
 
-using ObsInterop;
+using OBSharp.Interop;
 
 namespace OBSharp;
 
@@ -16,9 +16,9 @@ public static partial class OBSModule
     public const string Description = "通过 CoreCLR 运行插件";
 
     [UnmanagedCallersOnly]
-    public static unsafe void SetPointer(obs_module* module)
+    public static unsafe void SetPointer(ObsModule* module)
     {
-        string? path = Marshal.PtrToStringUTF8((nint)Obs.obs_get_module_data_path(module));
+        string? path = module->GetModuleDataPath();
         Debug.Assert(path is not null);
         path = Path.GetFullPath(path);
 

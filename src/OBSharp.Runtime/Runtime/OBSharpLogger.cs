@@ -1,11 +1,12 @@
 ﻿using System.Diagnostics;
-using System.Runtime.InteropServices;
 
 using Microsoft.Extensions.Logging;
 
+using OBSharp.Interop;
+
 namespace OBSharp.Runtime;
 
-internal sealed partial class OBSharpLogger(string categoryName) : ILogger
+internal sealed class OBSharpLogger(string categoryName) : ILogger
 {
     public const int LOG_ERROR = 100;
     public const int LOG_WARNING = 200;
@@ -30,7 +31,7 @@ internal sealed partial class OBSharpLogger(string categoryName) : ILogger
         Exception? exception,
         Func<TState, Exception?, string> formatter)
     {
-        int log_level = logLevel switch
+        int obsLogLevel = logLevel switch
         {
             LogLevel.Trace => 500,
             LogLevel.Debug => LOG_DEBUG,
@@ -42,7 +43,7 @@ internal sealed partial class OBSharpLogger(string categoryName) : ILogger
             _ => -1,
         };
 
-        if (log_level is -1)
+        if (obsLogLevel is -1)
             return;
 
         string level = logLevel switch
@@ -67,7 +68,7 @@ internal sealed partial class OBSharpLogger(string categoryName) : ILogger
 
         string text = $"[OBSharp] {level,-5} {categoryName,-16}: {message}";
         Debug.WriteLine(text);
-        blog(log_level, text);
+        ObsExtensions.Log(obsLogLevel, text);
     }
 
     private sealed class Scope(object state, Scope? parent) : IDisposable
@@ -80,8 +81,4 @@ internal sealed partial class OBSharpLogger(string categoryName) : ILogger
             CurrentScope.Value = Parent;
         }
     }
-
-    [LibraryImport("obs", StringMarshalling = StringMarshalling.Utf8)]
-    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
-    private static partial void blog(int log_level, string format);
 }
