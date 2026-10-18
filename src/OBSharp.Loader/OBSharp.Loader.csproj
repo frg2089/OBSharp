@@ -13,7 +13,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\OBSharp.Interop\OBSharp.Interop.csproj" />
-    <ProjectReference Include="..\OBSharp.SDK\OBSharp.SDK.csproj" />
   </ItemGroup>
 
 </Project>
