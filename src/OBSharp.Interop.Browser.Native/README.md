@@ -68,8 +68,8 @@ arm64 可执行文件，在 x64 机器上跑不动，所以模块会把 x64 那�
 `QT_HOST_PATH`（跟 obs-studio 的 `_handle_qt_cross_compile` 一个路子，两个包版本必须一致，
 清单里本来就是同一个版本）。自己给的 Qt6 时它不去动你的设置，只提示一句要设 `QT_HOST_PATH`。
 
-压缩包留在 `lib/deps/` 当缓存（下次 configure 命中就不重下），下载后先校验 SHA-256 再
-解压。解压时会自动处理「包里多套一层目录」的情况（Linux 的 CEF tar.xz 就是这样），所以
+压缩包留在 `lib/deps/` 当缓存（下次 configure 命中就不重下；CI 里这份压缩包还会按
+「系统 + 架构」缓存，见下面「CI」），下载后先校验 SHA-256 再解压。解压时会自动处理「包里多套一层目录」的情况（Linux 的 CEF tar.xz 就是这样），所以
 `lib/deps/<包名>/` 下面直接就是 `include/`、`lib/` 这些。
 
 > 文件名里带不带架构目录、iOS 那种多套一层的包，都按「解压到 `<目录>.unpack` → 找标志
@@ -89,9 +89,9 @@ arm64 可执行文件，在 x64 机器上跑不动，所以模块会把 x64 那�
 | --- | --- | --- | --- |
 | Windows x64 | `windows-2025-vs2026` | Visual Studio 18 2026（MSVC **v145**） | Windows SDK **10.0.26100.0** |
 | Windows arm64 | 同上（x64 机器上交叉编 arm64） | 同上 + VS 的「C++ ARM64 生成工具」组件 | 同上 + ARM64 / x64 两份 Qt6 |
-| Linux x86_64 | `ubuntu-24.04` | 发行版 GCC | 发行版 Qt6（`qt6-base-dev`） |
-| Linux arm64 | `ubuntu-24.04-arm`（GitHub 原生的 arm64 runner） | 同上 | 同上（apt 装下来的就是 arm64 那份） |
-| macOS arm64 / x86_64 | `macos-26` | Xcode 26（AppleClang） | obs-deps 的 universal Qt6 |
+| Linux x86_64 | `ubuntu-26.04` | 发行版 GCC | 发行版 Qt6（`qt6-base-dev`） |
+| Linux arm64 | `ubuntu-26.04-arm`（GitHub 原生的 arm64 runner） | 同上 | 同上（apt 装下来的就是 arm64 那份） |
+| macOS arm64 / x86_64 | `macos-26`（arm64 runner，两个 RID 都跑在它上面，x86_64 是交叉编出来的） | Xcode 26（AppleClang） | obs-deps 的 universal Qt6 |
 
 Windows 上对应的是预设 `win-x64`（x64）和 `win-arm64`（arm64，架构串
 `ARM64,version=10.0.26100.0`），生成器 `Visual Studio 18 2026` 跟 obs-studio 的
@@ -186,57 +186,67 @@ cmake --build out/build/native --config Release
 
 ## CI
 
-`.github/workflows/build-native.yml` 是整条流水线，分四段（产物按段传）：
+`.github/workflows/build.yml` 是整条流水线，分四段（产物按段传）：
 
 | 段 | job | 跑在 | 产物 artifact |
 | --- | --- | --- | --- |
-| 1. .NET 构建 | `dotnet` | `windows-2025-vs2026` | `OBSharp.Runtime-dotnet`（托管程序集）、`OBSharp.Interop.Generated`（生成器产出的绑定） |
-| 2. Native 矩阵 | `windows` | `windows-2025-vs2026`（x64 / arm64） | `OBSharp.Interop.Browser.Native-{win-x64,win-arm64}`、`OBSharp.Loader-…` |
-|  | `linux` | `ubuntu-24.04` / `ubuntu-24.04-arm` | `OBSharp.Interop.Browser.Native-linux-{x64,arm64}`、`OBSharp.Loader-…` |
-|  | `macos` | `macos-26`（arm64 / x86_64） | `OBSharp.Interop.Browser.Native-osx-{arm64,x64}`、`OBSharp.Loader-…` |
-| 3. 收集 | `runtime-package` | `ubuntu-24.04` | `OBSharp.Runtime-package`：`any/` 放托管程序集，`native/<rid>/` 放 6 个 RID 的原生库 |
-| 4. 组装 | `bundle` | `ubuntu-24.04`（6 个 RID 并行） | `OBSharp.plugin-<rid>`：摆好的插件目录 |
+| 1. .NET 构建 | `dotnet` | `windows-2025-vs2026` | `managed-assemblies`（Runtime 那份托管程序集）、`build-output`（`Directory.Version.props` + `artifacts/` + `src/OBSharp.Interop/Generated/`） |
+| 2. Native 矩阵 | `native` | 6 个 RID 各自挑 runner：`windows-2025-vs2026`（win-x64 / win-arm64）、`ubuntu-26.04`（linux-x64）、`ubuntu-26.04-arm`（linux-arm64）、`macos-26`（osx-x64 / osx-arm64） | `OBSharp.Interop.Browser.Native-<rid>`（原生库）、`OBSharp.Loader-<rid>`（Loader 的 publish） |
+| 3. 收 Runtime | `runtime` | `ubuntu-26.04` | `runtime`：`any/` 放托管程序集，`native/<rid>/` 放 6 个 RID 的原生库 |
+| 4. 组装插件 | `bundle` | `ubuntu-26.04`（6 个 RID 并行） | `OBSharp-<rid>`：摆好的插件目录（Windows / Linux 那份里面是 `OBSharp/`，macOS 是 `OBSharp.plugin/`） |
 
 第 1 段的产物要喂给第 2 段，是因为 `src/OBSharp.Interop/Generated/` 是 git 忽略的
 （`OBSharp.Interop.Generator` 的产出），干净 checkout 上不存在：`dotnet` job 跑一次生成器
 （ClangSharp 解析 libobs 头文件），原生矩阵直接下载现成的，省掉 6 次解析。
 
-它同时也是「怎么编译」的活文档：每个原生 job 里的 `cmake --preset …` 和
-`dotnet restore / build / publish …` 就是本地要敲的命令（命令约定和「为什么这么写」都写在
-workflow 开头的注释里）。Windows 那份还会用 `dumpbin` 对一遍公开头里的 `obsharp_*` 是不是
-全导出了（清单直接从文件里读，不用手抄）。
+同一个 artifact 里还带着 `Directory.Version.props`（GitVersion 按 git 历史算出来的版本号），
+它会落到仓库根，`Directory.Build.props` 里那句 `Import` 管的就是它；本地没这个文件，版本号
+就是 SDK 的默认 1.0.0。
+
+第 2 段的 6 个 job 还会把 `lib/deps/` 里的压缩包按「系统 + 架构」缓存起来（`actions/cache`，
+key 里带着 `lib/obs-studio` 的依赖清单和 `cmake/ObSharpDeps.cmake` 的哈希）。只缓存压缩包、
+不缓存解压出来的目录：6 个 RID 的依赖解压后十几 GB，会把仓库 10 GB 的缓存额度顶穿，而解压
+本身很快。压缩包下完还要过一次 SHA-256，所以缓存过期最多是多下一次，不会用错版本。
+
+它同时也是「怎么编译」的活文档：每个 job 里的 `cmake --preset …` 和
+`dotnet restore / build / publish …` 就是本地要敲的命令。公开头里的 `obsharp_*` 跟托管侧那些
+`EntryPoint` 是不是一一对应，是本地拿 `dumpbin /exports`（Linux / macOS 上 `nm -D`）核的，
+CI 里没有这一步。
 
 托管侧各 RID 单独发布 Loader，因为 AOT 是「一个 RID 一份原生二进制」；Runtime 只发一份，
 它是框架依赖的普通程序集，跟架构无关：
 
 ```sh
-# 1. 绑定：生成器只要跑一次（dotnet job）
+# 1. 绑定（dotnet job 的前半段）：生成器只要跑一次
 dotnet tool restore
-dotnet run --project src/OBSharp.Interop.Generator --artifacts-path artifacts --framework net10.0
+dotnet restore OBSharp.slnx --graph --artifacts-path artifacts
+dotnet build src/OBSharp.Interop.Generator --graph --artifacts-path artifacts --configuration Release --framework net10.0 --no-restore
+dotnet run --project src/OBSharp.Interop.Generator --artifacts-path artifacts --configuration Release --framework net10.0 --no-restore --no-build
+# → src/OBSharp.Interop/Generated/
 
 # 2. 原生库（每个 RID，见上面「本地怎么编」）
-cmake --preset win-x64 && cmake --build --preset win-x64-release
+cmake --preset win-x64
+cmake --build --preset win-x64-release
+# → out/native/x64/Release/
 
-# 3. Loader（每个 RID 三段；restore 没有 -c / --framework 开关，只能拿属性给）
-dotnet restore src/OBSharp.Loader/OBSharp.Loader.csproj -p:Configuration=Release -p:TargetFramework=net10.0 --runtime win-x64 --graph --artifacts-path artifacts
-dotnet build   src/OBSharp.Loader/OBSharp.Loader.csproj -c Release --no-restore --runtime win-x64 --graph --artifacts-path artifacts --framework net10.0
-dotnet publish src/OBSharp.Loader/OBSharp.Loader.csproj -c Release --no-build   --runtime win-x64 --graph --artifacts-path artifacts --framework net10.0
+# 3. Loader（每个 RID 三段）
+dotnet restore src/OBSharp.Loader --runtime win-x64 --graph --artifacts-path artifacts
+dotnet build src/OBSharp.Loader --runtime win-x64 --graph --artifacts-path artifacts --configuration Release --framework net10.0 --no-restore
+dotnet publish src/OBSharp.Loader --runtime win-x64 --graph --artifacts-path artifacts --configuration Release --framework net10.0 --no-restore --no-build
 # → artifacts/publish/OBSharp.Loader/release_net10.0_win-x64/
 
 # 4. Runtime：跨平台那一份（不带 -r），跟在整解决方案的 build 后面
-dotnet restore OBSharp.slnx -p:Configuration=Release -p:TargetFramework=net10.0 --graph --artifacts-path artifacts
-dotnet build   OBSharp.slnx -c Release --no-restore --graph --artifacts-path artifacts --framework net10.0
-dotnet publish src/OBSharp.Runtime/OBSharp.Runtime.csproj -c Release --no-build --graph --artifacts-path artifacts --framework net10.0
+dotnet build OBSharp.slnx --graph --artifacts-path artifacts --configuration Release --framework net10.0 --no-restore
+dotnet publish src/OBSharp.Runtime --graph --artifacts-path artifacts --configuration Release --framework net10.0 --no-restore --no-build
 # → artifacts/publish/OBSharp.Runtime/release_net10.0/
 ```
 
-* `-f/--framework net10.0` 不能省：`Directory.Build.props` 里写的是复数 `TargetFrameworks`，
-  不带 `-f` 的 publish 会报 `NETSDK1129`。
+* `-f/--framework net10.0` 不能省：`Directory.Build.props` 里写的是复数 `TargetFrameworks`
+  （现在是 net10.0 + net11.0），不带 `-f` 的 build / publish 会报 `NETSDK1129`。
 * 产物一律落 `artifacts/`（`--artifacts-path artifacts`），CI 上传 artifact 的路径就是照
   `artifacts/{bin,obj,publish}/<工程>/<配置>_<tfm>[_<rid>]/` 拼的。
-* restore 没有 `-c` / `--framework` 开关（写了会被 MSBuild 当未知开关报 MSB1001），要显式钉
-  配置和框架只能给 `-p:Configuration=` / `-p:TargetFramework=`。这两样只是声明性质：
-  `project.assets.json` 不按配置分目录，仓库也只有一个 TFM。**每个 RID 那份必须带
+* restore 没有 `-c` / `--framework` 开关（写了会被 MSBuild 当未知开关报 MSB1001）；仓库是多目标，
+  `dotnet restore` 把两个 TFM 都还原，发哪份由后面的 `-f net10.0` 定。**每个 RID 那份必须带
   `--runtime <rid>` 还原**，否则 `--no-restore` 的构建会 `NETSDK1047`（AssetsFile 里没有
   `net10.0/<rid>` 这个目标）。
 * **`OBSharp.Loader` 是 NativeAOT**，所以发布机器上得有本地工具链：Windows 要 MSVC 的
@@ -367,8 +377,8 @@ browser.PostMessage("""{"hello":"page"}""");
   `OBS_NIX_PLATFORM_WAYLAND` 时浏览器面板被禁用。
 * **`obsharp_browser_options.size`** 必须填 `sizeof(obsharp_browser_options)`；校验是
   `size < sizeof(...)` 才算非法，留了将来往后追加可选字段的余地。
-* **Linux / macOS 还没在真机上编过**。Windows 那几条路都实际跑过（VS 2026、VS 2022、
-  以及 CI 里那段导出符号校验，都在本地复现过）；Linux / macOS 目前只有平台适配代码，
+* **Linux / macOS 还没在真机上编过**。Windows 那几条路都实际跑过（VS 2026、VS 2022，
+  导出符号也对着公开头核过，都在本地做的）；Linux / macOS 目前只有平台适配代码，
   第一次真编是 GitHub CI 干的活，CI 红的话请看日志。
 * **Windows arm64 要装 VS 的「C++ ARM64 生成工具」组件**，而且是「x64 主机编 arm64
   目标」：Qt6 会下两份（ARM64 那份 + x64 那份当 `QT_HOST_PATH`），CEF 下 arm64 那份，
@@ -394,10 +404,11 @@ browser.PostMessage("""{"hello":"page"}""");
 | `OBSharp.Interop.Browser.Native.vcxproj` | MSBuild 外壳，转调 CMake |
 | `../../src/OBSharp.Interop.Browser/` | 托管绑定（`OBSharpNative` / `CefBrowser` 等） |
 | `../../CMakePresets.json` | 各平台的 CMake 预设（CI 用的就是这些） |
-| `../../.github/workflows/build-native.yml` | CI：.NET 构建 → 6 个 RID 的原生矩阵（原生库 + Loader）→ 收集成跨平台 Runtime 包 → 组装插件目录 |
+| `../../Directory.Build.props` | 公共 MSBuild 属性；旁边有 `Directory.Version.props`（CI 生成、不入库）就 import 进来，版本号从这儿进 |
+| `../../.github/workflows/build.yml` | CI：.NET 构建 → 6 个 RID 的原生矩阵（原生库 + Loader）→ 收集成跨平台 Runtime 包 → 组装插件目录 |
 | `../../scripts/Build-DevSymbolicLink.ps1` | 开发用：在 `out/plugin/<Rid>` 摆出上面那份目录结构（模块目录是真实文件，`bin/any`、`data` 是目录链接，改托管侧 / 数据不用重摆），再往 OBS 的插件目录里放一个目录链接指过来（Windows 用 Junction，Linux / macOS 用符号链接）—— 不用往 ProgramData / 安装目录里拷文件 |
 | `../../cmake/ObSharpDeps.cmake` | 缺 CEF / Qt6 时按 obs-studio 清单下载 |
-| `../../lib/deps/` | 下载的 CEF / Qt6（不入库，兼作压缩包缓存） |
+| `../../lib/deps/` | 下载的 CEF / Qt6（不入库；压缩包兼作本地与 CI 的缓存） |
 
 ## 许可证
 
