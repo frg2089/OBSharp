@@ -1,8 +1,9 @@
 # OBSharp.SDK
 
 写 OB# 插件要引用的就是这个项目：`ObsPlugin` 基类、宿主给插件的环境信息（`ObsPluginContext`），
-加上传递引用的 `OBSharp.Interop`（libobs 的全套绑定）和
-`Microsoft.Extensions.Logging.Abstractions`（`ILogger`，不用另外加包）。
+加上传递引用的 `OBSharp.Interop`（libobs 的全套绑定）、`OBSharp.Interop.Browser`
+（浏览器控件的托管绑定，原生库另说）和 `Microsoft.Extensions.Logging.Abstractions`
+（`ILogger`，不用另外加包）。
 
 ## 引用
 
@@ -21,7 +22,8 @@
 ```
 
 这个 `Import` 把宿主会提供的程序集从插件的输出里去掉：`OBSharp.SDK`、`OBSharp.Interop`、
-`Microsoft.Extensions.Logging.Abstractions` 和它带的 `Microsoft.Extensions.DependencyInjection.Abstractions`
+`OBSharp.Interop.Browser`、`Microsoft.Extensions.Logging.Abstractions` 和它带的
+`Microsoft.Extensions.DependencyInjection.Abstractions`
 （引用包时自动生效，不用写 `Import`）。它们只在编译时有用，运行时宿主自己带着（见「部署」）；
 不拷进 `bin`、不写进插件自己的 `deps.json`，`dotnet publish` 也一样。插件自己的第三方依赖不受影响，
 确实要带上它们的话设 `OBSharpExcludeHostAssembliesFromOutput=false`。
@@ -119,7 +121,7 @@ ObsExtensions.Log(300, "hello from plugin");
 `= false` 的行不会加载，但会留在插件列表里，可以在 OB# 的插件界面（`OBSharpPluginManager`）里启用。
 启用或停用之后 OB# 会把列表写回这个文件，所以手写的注释会被覆盖、相对路径会变成绝对路径。
 
-`OBSharp.SDK`、`OBSharp.Interop` 和 `Microsoft.Extensions.Logging.Abstractions` 由宿主提供：插件目录里就算有自己的一份副本也会被忽略（引用 SDK 时 `build/OBSharp.SDK.targets` 已经把它们从输出里去掉，编译时照样能引用）。跨边界的类型（`ObsPlugin`、`ILogger<T>`……）只有一份，插件才认得出来。插件加载在自己的 `AssemblyLoadContext` 里，可以卸载，卸载时宿主会把加载上下文也卸掉。
+`OBSharp.SDK`、`OBSharp.Interop`、`OBSharp.Interop.Browser` 和 `Microsoft.Extensions.Logging.Abstractions` 由宿主提供：插件目录里就算有自己的一份副本也会被忽略（引用 SDK 时 `build/OBSharp.SDK.targets` 已经把它们从输出里去掉，编译时照样能引用）。跨边界的类型（`ObsPlugin`、`ILogger<T>`……）只有一份，插件才认得出来。插件加载在自己的 `AssemblyLoadContext` 里，可以卸载，卸载时宿主会把加载上下文也卸掉。
 
 ## 目录
 
