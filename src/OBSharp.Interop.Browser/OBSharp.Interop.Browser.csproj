@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <!-- 原生库（src/OBSharp.Interop.Browser.Native）的产出，见它的 CMakeLists.txt。
+       构建过就跟着一起复制；没构建过就静默跳过——托管代码不依赖它才能编译。
+
+       目录名是 CMake 那边的架构标签（x64 / arm64）。发布（dotnet publish -r <RID>）
+       时按 RID 自动挑，省得手写 -p:OBSharpNativeArch=arm64；也可以显式覆盖。 -->
+  <PropertyGroup>
+    <OBSharpNativeArch Condition="'$(OBSharpNativeArch)' == '' and ('$(RuntimeIdentifier)' == 'win-arm64' or '$(RuntimeIdentifier)' == 'linux-arm64' or '$(RuntimeIdentifier)' == 'osx-arm64')">arm64</OBSharpNativeArch>
+    <OBSharpNativeArch Condition="'$(OBSharpNativeArch)' == ''">x64</OBSharpNativeArch>
+    <OBSharpNativeDir>$(MSBuildThisFileDirectory)..\..\out\native\$(OBSharpNativeArch)\$(Configuration)\</OBSharpNativeDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(OBSharpNativeDir)OBSharp.Interop.Browser.Native.dll"
+          Condition="Exists('$(OBSharpNativeDir)OBSharp.Interop.Browser.Native.dll')"
+          Link="OBSharp.Interop.Browser.Native.dll"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(OBSharpNativeDir)libOBSharp.Interop.Browser.Native.so"
+          Condition="Exists('$(OBSharpNativeDir)libOBSharp.Interop.Browser.Native.so')"
+          Link="libOBSharp.Interop.Browser.Native.so"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(OBSharpNativeDir)libOBSharp.Interop.Browser.Native.dylib"
+          Condition="Exists('$(OBSharpNativeDir)libOBSharp.Interop.Browser.Native.dylib')"
+          Link="libOBSharp.Interop.Browser.Native.dylib"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
