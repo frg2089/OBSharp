@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+
   <PropertyGroup>
     <RootNamespace>OBSharp</RootNamespace>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
@@ -10,6 +10,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- 插件日志用的抽象；有它才拿得到 ILogger/ILogger<T>/[LoggerMessage]。 -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <!-- 传递引用：插件引用 SDK 就顺带拿到 libobs 的绑定。 -->
     <ProjectReference Include="..\OBSharp.Interop\OBSharp.Interop.csproj" />
   </ItemGroup>
+
 </Project>

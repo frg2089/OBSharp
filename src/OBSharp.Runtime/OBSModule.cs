@@ -22,12 +22,14 @@ public static partial class OBSModule
         Debug.Assert(path is not null);
         path = Path.GetFullPath(path);
 
-        OBSharpHostBuilder builder = new(path);
-
-        s_host = builder.Build();
-
-        s_host.SetPointer(module);
+        // OBS 模块指针只到这里为止：插件拿不到它，需要的东西都由宿主转成托管对象。
+        s_host = new OBSharpHostBuilder(path).Build();
     }
+
+    /// <summary>
+    /// 插件管理：枚举、启用、停用插件。<c>obs_module_set_pointer</c> 之后才可用。
+    /// </summary>
+    public static OBSharpPluginManager PluginManager => s_host.PluginManager;
 
     [UnmanagedCallersOnly]
     public static int Load() => s_host.Load() ? 1 : 0;

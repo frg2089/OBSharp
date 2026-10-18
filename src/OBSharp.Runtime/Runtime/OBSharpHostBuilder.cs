@@ -1,54 +1,18 @@
 ﻿using System.Diagnostics;
+using System.Text.Json;
 
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Configuration;
 
 namespace OBSharp.Runtime;
 
-internal sealed class OBSharpHostBuilder
+internal sealed class OBSharpHostBuilder(string dataPath)
 {
-    public IConfigurationBuilder Configuration { get; } = new ConfigurationBuilder();
-    public IServiceCollection Service { get; } = new ServiceCollection();
-
-    public OBSharpHostBuilder(string dataPath)
-    {
-        Configuration.AddJsonFile(Path.Combine(dataPath, "appsettings.json"), true);
-
-        string pluginList = Path.Combine(dataPath, "plugins.ini");
-        using (TextReader fs = File.Exists(pluginList)
-                ? File.OpenText(pluginList)
-                : new StringReader(string.Empty))
-            OBSharpPluginManager.LoadPlugins(Service, fs);
-
-        Service
-            .AddSingleton<OBSharpHost>()
-            .AddOptions<OBSharpHostOptions>()
-            .BindConfiguration("Runtime")
-            .PostConfigure(options => options.ContentPath = dataPath)
-            .ValidateDataAnnotations()
-            .ValidateOnStart();
-
-        Service
-            .AddSingleton<IDataFolderProvider>(provider => provider.GetRequiredService<OBSharpHost>())
-            .AddSingleton<IRuntimeInfoProvider>(provider => provider.GetRequiredService<OBSharpHost>());
-
-        Service.AddLogging(builder =>
-        {
-            builder.AddProvider(new OBSharpLoggerProvider());
-            builder.AddConfiguration();
-        });
-    }
-
     public OBSharpHost Build()
     {
-        var config = Configuration.Build();
-        Service.AddSingleton(config);
-        Service.AddSingleton<IConfiguration>(config);
-        var provider = Service.BuildServiceProvider();
-        var logger = provider.GetRequiredService<ILogger<OBSharpHostBuilder>>();
-        AppDomain.CurrentDomain.UnhandledException += (o, e) =>
+        OBSharpLoggerFactory loggerFactory = new();
+        ILogger<OBSharpHostBuilder> logger = loggerFactory.CreateLogger<OBSharpHostBuilder>();
+
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {
             if (e.ExceptionObject is Exception ex)
                 logger.LogCritical(ex, "Unhandled exception.");
@@ -61,15 +25,49 @@ internal sealed class OBSharpHostBuilder
             if (Debugger.IsAttached)
                 Debugger.Break();
         };
+
         try
         {
             logger.LogInformation("Building OBSharpHost.");
-            return provider.GetRequiredService<OBSharpHost>();
+
+            var options = new OBSharpHostOptions(ReadRuntimeFramework(dataPath, logger), dataPath);
+            OBSharpPluginManager pluginManager = new(options, loggerFactory);
+
+            return new OBSharpHost(pluginManager, loggerFactory, loggerFactory.CreateLogger<OBSharpHost>());
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Building OBSharpHost failed.");
             throw;
         }
+    }
+
+    // appsettings.json 里只有运行时框架这一项（Loader 在启动 CoreCLR 之前也读同一个键）。
+    internal static RuntimeFramework ReadRuntimeFramework(string dataPath, ILogger logger)
+    {
+        string path = Path.Combine(dataPath, "appsettings.json");
+        if (!File.Exists(path))
+            return RuntimeFramework.Core;
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllBytes(path), new JsonDocumentOptions
+            {
+                CommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true,
+            });
+
+            if (document.RootElement.TryGetProperty("Runtime", out JsonElement runtime) &&
+                runtime.TryGetProperty("RuntimeFramework", out JsonElement framework) &&
+                framework.ValueKind is JsonValueKind.String &&
+                Enum.TryParse(framework.GetString(), ignoreCase: true, out RuntimeFramework value))
+                return value;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Cannot read {Path}.", path);
+        }
+
+        return RuntimeFramework.Core;
     }
 }

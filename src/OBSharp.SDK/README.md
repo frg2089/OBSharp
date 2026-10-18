@@ -1,12 +1,14 @@
 # OBSharp.SDK
 
-写 OB# 插件要引用的就是这个项目：`ObsPlugin` 基类、宿主给插件的环境信息，加上传递引用的 `OBSharp.Interop`（libobs 的全套绑定）。
+写 OB# 插件要引用的就是这个项目：`ObsPlugin` 基类、宿主给插件的环境信息（`ObsPluginContext`），
+加上传递引用的 `OBSharp.Interop`（libobs 的全套绑定）和
+`Microsoft.Extensions.Logging.Abstractions`（`ILogger`，不用另外加包）。
 
 ## 引用
 
 ```xml
 <PropertyGroup>
-  <!-- 插件要直接读写指针（Module、interop 绑定等） -->
+  <!-- 插件自己要读写指针时才需要，interop 绑定基本都是指针 -->
   <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 </PropertyGroup>
 
@@ -15,18 +17,14 @@
 </ItemGroup>
 ```
 
-想通过构造函数注入 `ILogger<T>` 的话，再加一个 `Microsoft.Extensions.Logging.Abstractions` 包引用。
-
 ## 最小插件
 
 ```csharp
-using Microsoft.Extensions.Logging;
-
 using OBSharp;
 
 namespace MyPlugin;
 
-public sealed unsafe class MyPlugin(ILogger<MyPlugin> logger) : ObsPlugin
+public sealed class MyPlugin : ObsPlugin
 {
     // 插件名，同时也是数据目录名；不写就用程序集名。
     public override string Name => "MyPlugin";
@@ -34,8 +32,8 @@ public sealed unsafe class MyPlugin(ILogger<MyPlugin> logger) : ObsPlugin
 
     public override bool Load()
     {
-        logger.LogInformation("数据目录：{DataFolder}", DataFolder);
-        logger.LogInformation("OB# 模块名：{ModuleName}", Module->GetModuleName());
+        Logger.LogInformation("数据目录：{DataFolder}", DataFolder);
+        Logger.LogInformation("宿主框架：{RuntimeFramework}", Context.RuntimeFramework);
         return true;
     }
 
@@ -46,27 +44,29 @@ public sealed unsafe class MyPlugin(ILogger<MyPlugin> logger) : ObsPlugin
 }
 ```
 
-一个程序集里只能有一个 `ObsPlugin` 子类。插件的构造函数由宿主用依赖注入构造，可以注入下表列出的任何服务。
+一个程序集里只能有一个 `ObsPlugin` 子类，而且构造函数不能带参数：宿主用无参构造造出插件，再附加
+`Context`，之后 `Load()` 里才拿得到东西。
 
 ## 生命周期
 
 `Load()` → 所有插件都加载完再 `PostLoad()` → 卸载时 `Unload()`（实现了 `IDisposable` 的插件还会顺带 `Dispose()`）。
 
-- 插件抛异常只会记一条日志，不会影响别的插件。
-- `Load()` 返回 `false` 表示加载失败（宿主记一条 Warning），模块本身继续。
+- 插件抛异常只会记一条日志，不影响别的插件。
+- `Load()` 返回 `false` 或者抛异常表示加载失败：宿主记一条日志，然后回滚这个插件（`Unload()` 加卸掉加载上下文），
+  不会留下半加载状态。插件列表里会显示成失败，可以再启用一次。
 
 ## 插件能拿到什么
 
 | 成员 | 说明 |
 | --- | --- |
-| `Name` / `Description` | 插件名与描述，加载前就可用 |
+| `Name` / `Description` | 插件名与描述，加载前就可用；宿主加载时读一次存下来，之后不再问插件 |
 | `Context` | `ObsPluginContext`，`Load()` 之后才可用 |
-| `DataFolder` | `<OB# 数据目录>/<插件名>`，加载前已经创建好 |
-| `Module` | OB# 这个 OBS 模块的 `obs_module_t*` |
-| `Services` | 宿主的服务容器 |
+| `DataFolder` | `<OB# 数据目录>/<插件名>`，附加之前已经创建好 |
+| `Logger` | 插件自己的日志，直接写进 OBS 的日志 |
+| `RuntimeFramework` | 宿主运行时框架：`Core` / `AspNet` / `WindowsDesktop` |
 | `GetText(key)` | 插件自己的本地化字符串 |
 
-构造函数里可以注入：`ILogger<T>`、`IConfiguration`、`IOptions<T>`、`IServiceProvider`、`IDataFolderProvider`、`IRuntimeInfoProvider`。
+OB# 自己的东西（比如它作为 OBS 模块的 `obs_module_t*`）不会交给插件；插件需要什么，宿主都转成托管对象给。
 
 ## 调用 libobs
 
@@ -79,15 +79,7 @@ using var data = ObsDataExtensions.Create();
 data?.SetString("name", "value");
 string? json = data?.GetJson();
 
-// 裸指针（char*）由调用方释放
-byte* file = Module->FindModuleFile("something.txt");
-if (file is not null)
-{
-    string path = System.Runtime.InteropServices.Marshal.PtrToStringUTF8((nint)file)!;
-    Base.Bfree((nint)file);
-}
-
-// 直接写 OBS 日志（一般用 ILogger 就够了）
+// 直接写 OBS 日志（一般用 Logger 就够了）
 ObsExtensions.Log(300, "hello from plugin");
 ```
 
@@ -107,13 +99,18 @@ ObsExtensions.Log(300, "hello from plugin");
 2. 在 `<数据目录>/obs-plugins/OBSharp/plugins.ini` 里写一行，`=` 后面是 `true`：
 
    ```ini
+   ; 插件列表：<程序集路径> = <true|false>，分号和 # 后面是注释
    C:\path\to\MyPlugin\MyPlugin.dll = true
-   ; 分号和 # 后面是注释，值不是 true 的行会被忽略
+   MyOther\MyOtherPlugin.dll = false
    ```
 
+   路径可以写相对的，按这个文件所在目录（也就是 OB# 数据目录）解析。
 3. 重启 OBS。
 
-`OBSharp.SDK`、`OBSharp.Interop` 和 `Microsoft.Extensions.*` 由宿主提供：插件目录里就算有自己的一份副本也会被忽略。跨边界的类型（`ObsPlugin`、`ILogger<T>`……）只有一份，插件才认得出来。插件加载在自己的 `AssemblyLoadContext` 里，可以卸载，卸载时宿主会把加载上下文也卸掉。
+`= false` 的行不会加载，但会留在插件列表里，可以在 OB# 的插件界面（`OBSharpPluginManager`）里启用。
+启用或停用之后 OB# 会把列表写回这个文件，所以手写的注释会被覆盖、相对路径会变成绝对路径。
+
+`OBSharp.SDK`、`OBSharp.Interop` 和 `Microsoft.Extensions.Logging.Abstractions` 由宿主提供：插件目录里就算有自己的一份副本也会被忽略。跨边界的类型（`ObsPlugin`、`ILogger<T>`……）只有一份，插件才认得出来。插件加载在自己的 `AssemblyLoadContext` 里，可以卸载，卸载时宿主会把加载上下文也卸掉。
 
 ## 目录
 
@@ -121,5 +118,4 @@ ObsExtensions.Log(300, "hello from plugin");
 | --- | --- |
 | `ObsPlugin.cs` | 插件基类 |
 | `ObsPluginContext.cs` | 宿主交给插件的环境信息、本地化字符串 |
-| `IDataFolderProvider.cs` | 插件数据目录的提供者（宿主实现） |
-| `IRuntimeInfoProvider.cs` | 宿主运行时框架信息（宿主实现） |
+| `RuntimeFramework.cs` | 宿主运行时框架 |

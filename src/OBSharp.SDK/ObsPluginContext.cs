@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using System.Globalization;
 
-using OBSharp.Interop;
+using Microsoft.Extensions.Logging;
 
 namespace OBSharp;
 
@@ -9,7 +9,7 @@ namespace OBSharp;
 /// 宿主（OBSharp.Runtime）为每个插件准备好的环境信息，插件通过
 /// <see cref="ObsPlugin.Context"/> 拿到它。插件不需要自己构造。
 /// </summary>
-public sealed unsafe class ObsPluginContext
+public sealed class ObsPluginContext
 {
     private const string FallbackLocale = "en-US";
 
@@ -17,19 +17,12 @@ public sealed unsafe class ObsPluginContext
     // 所以这里按语言名缓存，插件可以在任意线程上调用 GetText。
     private readonly ConcurrentDictionary<string, Dictionary<string, string>> _locales = new(StringComparer.OrdinalIgnoreCase);
 
-    internal ObsPluginContext(ObsModule* module, string dataFolder, IServiceProvider services, RuntimeFramework runtimeFramework)
+    internal ObsPluginContext(string dataFolder, RuntimeFramework runtimeFramework, ILogger logger)
     {
-        Module = module;
         DataFolder = dataFolder;
-        Services = services;
         RuntimeFramework = runtimeFramework;
+        Logger = logger;
     }
-
-    /// <summary>
-    /// OB# 这个 OBS 模块的 <c>obs_module_t*</c>。可以拿它调用生成的绑定，
-    /// 比如 <c>Module-&gt;GetModuleDataPath()</c>、<c>Module-&gt;FindModuleFile()</c>。
-    /// </summary>
-    public ObsModule* Module { get; }
 
     /// <summary>
     /// 插件的数据目录 <c>&lt;OB# 数据目录&gt;/&lt;插件名&gt;</c>，附加到插件之前已经创建好。
@@ -37,9 +30,14 @@ public sealed unsafe class ObsPluginContext
     public string DataFolder { get; }
 
     /// <summary>
-    /// 宿主注册的服务，可以解析 <c>ILogger&lt;T&gt;</c>、<c>IConfiguration</c>、<c>IOptions&lt;T&gt;</c> 等。
+    /// 插件自己的日志，写进 OBS 的日志（<c>blog</c>），类别名是插件的类型全名。
     /// </summary>
-    public IServiceProvider Services { get; }
+    public ILogger Logger { get; }
+
+    /// <summary>
+    /// 宿主运行时框架。插件依赖了别的框架（比如 ASP.NET）时可以先看看宿主加载了没有。
+    /// </summary>
+    public RuntimeFramework RuntimeFramework { get; }
 
     /// <summary>
     /// 宿主是否加载了 Microsoft.AspNetCore.App。
@@ -50,10 +48,6 @@ public sealed unsafe class ObsPluginContext
     /// 宿主是否加载了 Microsoft.WindowsDesktop.App。
     /// </summary>
     public bool UseWindowsDesktop => RuntimeFramework is RuntimeFramework.WindowsDesktop;
-    /// <summary>
-    /// 宿主运行时框架。
-    /// </summary>
-    public RuntimeFramework RuntimeFramework { get; }
 
     /// <summary>
     /// 读取插件自己的本地化字符串：<c>&lt;DataFolder&gt;/locale/&lt;locale&gt;.ini</c>，
