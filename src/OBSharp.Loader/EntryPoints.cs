@@ -107,15 +107,16 @@ public static unsafe class EntryPoints
                 Logger.Debug($"Loading appsettings.json from {appsettings}");
                 using var fs = File.OpenRead(appsettings);
                 var appconfig = JsonSerializer.Deserialize(fs, SourceGenerationContext.Default.AppSettings);
-                if (appconfig?.Runtime.UseWindowsDesktop is true)
+                switch (appconfig?.Runtime.RuntimeFramework)
                 {
-                    Logger.Info($"Using WindowsDesktop framework.");
-                    frameworks.Add(WindowsDesktop);
-                }
-                if (appconfig?.Runtime.UseAspNet is true)
-                {
-                    Logger.Info($"Using AspNetCore framework.");
-                    frameworks.Add(AspNetCore);
+                    case RuntimeFramework.WindowsDesktop:
+                        Logger.Info($"Using WindowsDesktop framework.");
+                        frameworks.Add(WindowsDesktop);
+                        break;
+                    case RuntimeFramework.AspNet:
+                        Logger.Info($"Using AspNetCore framework.");
+                        frameworks.Add(AspNetCore);
+                        break;
                 }
             }
 

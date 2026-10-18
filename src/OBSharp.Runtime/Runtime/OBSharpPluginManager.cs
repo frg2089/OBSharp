@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -43,28 +43,47 @@ public sealed partial class OBSharpPluginManager(Dictionary<Type, OBSharpPluginL
                 continue;
 
             string asmPath = path.ToString();
-            log.AddLast(KeyValuePair.Create(LogLevel.Debug, $"Load plugin \"{asmPath}\"."));
+            log.AddLast(KeyValuePair.Create(LogLevel.Debug, $"Loading plugin \"{asmPath}\"."));
             OBSharpPluginLoadContext context = new(asmPath);
-            var asm = context.LoadFromAssemblyPath(asmPath);
-
-            var plugins = asm.ExportedTypes.Where(static i => i.IsAssignableTo(typeof(ObsPlugin))).ToImmutableArray();
-            if (!plugins.Any())
+            ImmutableArray<Type> plugins;
+            try
             {
-                log.AddLast(KeyValuePair.Create(LogLevel.Error, $"Cannot load plugin \"{path}\". because \"{path}\" have not implemented ObsPlugin."));
-                context.Unload();
-                continue;
+                var asm = context.LoadFromAssemblyPath(asmPath);
+                plugins = [.. asm.ExportedTypes.Where(static i => i.IsClass && !i.IsAbstract && typeof(ObsPlugin).IsAssignableFrom(i))];
             }
-            else if (plugins.Length is not 1)
+            catch (Exception ex)
             {
-                log.AddLast(KeyValuePair.Create(LogLevel.Error, $"Cannot load plugin \"{path}\". because \"{path}\" have multiple implemented ObsPlugin."));
+                log.AddLast(KeyValuePair.Create(LogLevel.Error, $"Cannot load plugin \"{asmPath}\".\n{ex}"));
                 context.Unload();
                 continue;
             }
 
-            log.AddLast(KeyValuePair.Create(LogLevel.Information, $"Load plugin \"{asmPath}\" success."));
+            if (plugins.IsEmpty)
+            {
+                log.AddLast(KeyValuePair.Create(LogLevel.Error, $"Cannot load plugin \"{asmPath}\": it has no ObsPlugin implementation."));
+                context.Unload();
+                continue;
+            }
+
+            if (plugins.Length is not 1)
+            {
+                log.AddLast(KeyValuePair.Create(LogLevel.Error, $"Cannot load plugin \"{asmPath}\": it has {plugins.Length} ObsPlugin implementations."));
+                context.Unload();
+                continue;
+            }
+
+            log.AddLast(KeyValuePair.Create(LogLevel.Information, $"Loaded plugin \"{asmPath}\"."));
             var type = plugins[0];
-            store[type] = context;
-            services.TryAddEnumerable(ServiceDescriptor.Singleton(typeof(ObsPlugin), type));
+            if (!store.TryAdd(type, context))
+            {
+                log.AddLast(KeyValuePair.Create(LogLevel.Warning, $"Plugin \"{asmPath}\" is already loaded, skipped."));
+                context.Unload();
+                continue;
+            }
+
+            // 按插件自己的类型注册成单例：宿主靠它构造插件，插件构造函数里
+            // 于是能注入任何宿主注册的服务（ILogger<T>、IConfiguration ……）。
+            services.TryAdd(ServiceDescriptor.Singleton(type, type));
         }
 
         services.AddSingleton<OBSharpPluginManager>(provider =>
@@ -84,28 +103,54 @@ public sealed partial class OBSharpPluginManager(Dictionary<Type, OBSharpPluginL
 
     public IEnumerable<ObsPlugin> GetPlugins()
     {
-        foreach (var type in store.Keys)
+        // 拿到快照再遍历：构造插件时可能失败，卸载时又会改动 store。
+        foreach (var type in store.Keys.ToArray())
         {
-            if (serviceProvider.GetService(type) is ObsPlugin plugin)
+            ObsPlugin? plugin = null;
+            try
+            {
+                plugin = serviceProvider.GetService(type) as ObsPlugin;
+            }
+            catch (Exception ex)
+            {
+                LogCreatePluginFailed(ex, type);
+            }
+
+            if (plugin is not null)
                 yield return plugin;
         }
     }
 
     public void UnloadPlugin(ObsPlugin plugin)
     {
-        plugin.Unload();
-        if (plugin is IDisposable disposable)
-            disposable.Dispose();
-
         var pluginType = plugin.GetType();
-        if (!store.TryGetValue(pluginType, out var context))
-            return;
-
-        LogUnloadPlugin(pluginType);
-        store.Remove(pluginType);
-        context.Unload();
+        try
+        {
+            plugin.Unload();
+            if (plugin is IDisposable disposable)
+                disposable.Dispose();
+        }
+        catch (Exception ex)
+        {
+            LogUnloadPluginFailed(ex, pluginType);
+        }
+        finally
+        {
+            // 插件自己抛异常也要把加载上下文卸掉，不然程序集一直留在内存里。
+            if (store.Remove(pluginType, out var context))
+            {
+                LogUnloadPlugin(pluginType);
+                context.Unload();
+            }
+        }
     }
 
     [LoggerMessage(LogLevel.Debug, "Unload plugin {PluginType}")]
     private partial void LogUnloadPlugin(Type pluginType);
+
+    [LoggerMessage(LogLevel.Error, "Cannot create plugin {PluginType}.")]
+    private partial void LogCreatePluginFailed(Exception exception, Type pluginType);
+
+    [LoggerMessage(LogLevel.Error, "Plugin {PluginType} failed to unload.")]
+    private partial void LogUnloadPluginFailed(Exception exception, Type pluginType);
 }

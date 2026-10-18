@@ -7,6 +7,6 @@ internal sealed record AppSettings(
 );
 
 internal sealed record Runtime(
-    [property: JsonPropertyName("UseAspNet")] bool UseAspNet,
-    [property: JsonPropertyName("UseWindowsDesktop")] bool UseWindowsDesktop
+    [property: JsonPropertyName("RuntimeFramework"), JsonConverter(typeof(JsonStringEnumConverter<RuntimeFramework>))]
+    RuntimeFramework RuntimeFramework = RuntimeFramework.Core
 );

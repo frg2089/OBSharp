@@ -1,5 +1,15 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <RootNamespace>OBSharp</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 只有宿主能给插件附加 ObsPluginContext。 -->
+    <InternalsVisibleTo Include="OBSharp.Runtime" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OBSharp.Interop\OBSharp.Interop.csproj" />
+  </ItemGroup>
 </Project>
