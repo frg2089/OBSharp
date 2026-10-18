@@ -400,3 +400,25 @@ insert_final_newline = true
 dotnet_style_allow_multiple_blank_lines_experimental = false:silent
 dotnet_style_allow_statement_immediately_after_block_experimental = false:silent
 
+# C / C++ 源码
+# 跟上游 obs-studio / obs-browser 保持一致：制表符缩进、UTF-8（无 BOM）、LF。
+# 注释里有中文，所以 MSVC 需要 /utf-8（见 src/OBSharp.Interop.Browser.Native/CMakeLists.txt）。
+[*.{c,cc,cpp,cxx,h,hh,hpp,hxx}]
+indent_style = tab
+indent_size = 8
+tab_width = 8
+end_of_line = lf
+charset = utf-8
+
+# CMake / MSBuild
+[CMakeLists.txt]
+indent_style = space
+indent_size = 2
+
+[*.cmake]
+indent_style = space
+indent_size = 2
+
+[*.vcxproj]
+indent_style = space
+indent_size = 2

@@ -1,0 +1,164 @@
+
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "win-x64",
+      "displayName": "Windows x64（VS 2026 / MSVC v145）",
+      "description": "Windows x64，使用 Visual Studio 18 2026 和 Windows SDK 10.0.26100.0。",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64,version=10.0.26100.0",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "installDir": "${sourceDir}/out/install/${presetName}",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "win-arm64",
+      "displayName": "Windows ARM64（VS 2026 / MSVC v145）",
+      "description": "可在 Windows x64 主机上交叉编译 ARM64。需要安装 VS 的 C++ ARM64 生成工具及对应架构的依赖。",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "ARM64,version=10.0.26100.0",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "installDir": "${sourceDir}/out/install/${presetName}",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "linux-x64",
+      "displayName": "Linux x64（发行版 GCC + Qt6）",
+      "description": "原生 Linux x64 构建，使用发行版 GCC 和 Qt6。CEF 由项目依赖配置获取。",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "installDir": "${sourceDir}/out/install/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "linux-arm64",
+      "displayName": "Linux ARM64（发行版 GCC + Qt6）",
+      "description": "原生 Linux ARM64 构建，使用 ARM64 主机上的发行版 GCC 和 Qt6。交叉编译时还需配置目标 sysroot 和依赖。",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "installDir": "${sourceDir}/out/install/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "osx-arm64",
+      "displayName": "macOS ARM64（Apple Silicon）",
+      "description": "构建 macOS ARM64 版本。CEF 使用对应架构的依赖，Qt6 可使用 universal 版本。",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "installDir": "${sourceDir}/out/install/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "osx-x64",
+      "displayName": "macOS x64（Intel）",
+      "description": "构建 macOS x86_64 版本。Apple Silicon 主机也可交叉编译，但需要匹配的目标架构依赖。",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "installDir": "${sourceDir}/out/install/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_OSX_ARCHITECTURES": "x86_64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "win-x64-debug",
+      "configurePreset": "win-x64",
+      "configuration": "Debug",
+      "targets": [
+        "OBSharp.Interop.Browser.Native"
+      ]
+    },
+    {
+      "name": "win-x64-release",
+      "configurePreset": "win-x64",
+      "configuration": "Release",
+      "targets": [
+        "OBSharp.Interop.Browser.Native"
+      ]
+    },
+    {
+      "name": "win-arm64-debug",
+      "configurePreset": "win-arm64",
+      "configuration": "Debug",
+      "targets": [
+        "OBSharp.Interop.Browser.Native"
+      ]
+    },
+    {
+      "name": "win-arm64-release",
+      "configurePreset": "win-arm64",
+      "configuration": "Release",
+      "targets": [
+        "OBSharp.Interop.Browser.Native"
+      ]
+    },
+    {
+      "name": "linux-x64-release",
+      "configurePreset": "linux-x64",
+      "targets": [
+        "OBSharp.Interop.Browser.Native"
+      ]
+    },
+    {
+      "name": "linux-arm64-release",
+      "configurePreset": "linux-arm64",
+      "targets": [
+        "OBSharp.Interop.Browser.Native"
+      ]
+    },
+    {
+      "name": "osx-arm64-release",
+      "configurePreset": "osx-arm64",
+      "targets": [
+        "OBSharp.Interop.Browser.Native"
+      ]
+    },
+    {
+      "name": "osx-x64-release",
+      "configurePreset": "osx-x64",
+      "targets": [
+        "OBSharp.Interop.Browser.Native"
+      ]
+    }
+  ]
+}
