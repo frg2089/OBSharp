@@ -321,14 +321,21 @@ nint widget = browser.Widget;
 browser.PostMessage("""{"hello":"page"}""");
 ```
 
+## C ABI 命名
+
+* **模块级**（库自己的初始化 / 版本 / 线程辅助）：前缀就是库名，`obsharp_browser_native_*`，
+  宏 `OBSHARP_BROWSER_NATIVE_{API,CALL,BUILD,ABI_VERSION}`。
+* **对象级**（一个浏览器实例上的操作）：`obsharp_browser_*`，句柄类型 `obsharp_browser`。
+* 返回码、枚举走短名字（`OBSHARP_ERR_*` / `obsharp_result`），不挂前缀。
+
 ## 线程规则
 
-* 除了 `obsharp_native_initialize` / `obsharp_native_is_available` /
-  `obsharp_native_abi_version` / `obsharp_native_version` /
-  `obsharp_native_last_error` / `obsharp_native_is_ui_thread`，其余函数都会碰 Qt，
+* 除了 `obsharp_browser_native_initialize` / `obsharp_browser_native_is_available` /
+  `obsharp_browser_native_abi_version` / `obsharp_browser_native_version` /
+  `obsharp_browser_native_last_error` / `obsharp_browser_native_is_ui_thread`，其余函数都会碰 Qt，
   **必须跑在 OBS 的 Qt 主线程**。
 * 不在主线程时，托管层会自动用 `OBSharpNative.InvokeUi` 切过去（已经在主线程时是
-  直调）。原生侧也提供 `obsharp_native_invoke_ui()` 给 C 调用方。
+  直调）。原生侧也提供 `obsharp_browser_native_invoke_ui()` 给 C 调用方。
 * 回调（title / url / load-end / console / message）**全部在 Qt 主线程上**触发。
   scheme handler 的 message 回调实际跑在 CEF 的 UI 线程（Windows/Linux 上跟 Qt 线程
   不是同一个），原生侧会用 `QMetaObject::invokeMethod(..., Qt::QueuedConnection)`

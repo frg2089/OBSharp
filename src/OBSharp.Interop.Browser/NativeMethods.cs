@@ -14,36 +14,36 @@ internal static unsafe partial class NativeMethods
 
     // ---- 版本与初始化 -----------------------------------------------------
 
-    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_native_abi_version")]
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_browser_native_abi_version")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial uint AbiVersion();
 
-    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_native_version")]
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_browser_native_version")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial byte* Version();
 
-    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_native_initialize",
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_browser_native_initialize",
                    StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int Initialize(string? logTag);
 
-    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_native_is_available")]
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_browser_native_is_available")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int IsAvailable();
 
-    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_native_last_error")]
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_browser_native_last_error")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial byte* LastError();
 
-    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_native_is_ui_thread")]
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_browser_native_is_ui_thread")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int IsUiThread();
 
-    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_native_invoke_ui")]
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_browser_native_invoke_ui")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int InvokeUi(delegate* unmanaged[Cdecl]<nint, void> fn, nint user);
 
-    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_native_probe_endpoint",
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_browser_native_probe_endpoint",
                    StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int ProbeEndpoint(string? endpoint, int endpointKind);

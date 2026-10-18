@@ -76,7 +76,7 @@ obsharp_browser *g_activeBrowser = nullptr; // 页面消息往哪儿派发
 bool g_schemeInstalled = false;
 std::string g_schemeKey;
 
-void OBSHARP_NATIVE_CALL DestroyBrowserThunk(void *user);
+void OBSHARP_BROWSER_NATIVE_CALL DestroyBrowserThunk(void *user);
 
 // ---------------------------------------------------------------------------
 // Qt 主线程
@@ -95,7 +95,7 @@ void PostToQtThread(std::function<void()> fn) {
 
 // 是否在 Qt 主线程上。不在的话把原因写进 last error 并返回错误码。
 int32_t RequireUiThread(const char *what) {
-	if (obsharp_native_is_ui_thread())
+	if (obsharp_browser_native_is_ui_thread())
 		return OBSHARP_OK;
 
 	return Fail(OBSHARP_ERR_WRONG_THREAD, std::string(what) + " must be called on the Qt main thread");
@@ -292,15 +292,15 @@ bool IsUsable(obsharp_browser *browser) {
 
 extern "C" {
 
-uint32_t OBSHARP_NATIVE_CALL obsharp_native_abi_version(void) {
-	return OBSHARP_NATIVE_ABI_VERSION;
+uint32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_native_abi_version(void) {
+	return OBSHARP_BROWSER_NATIVE_ABI_VERSION;
 }
 
-const char *OBSHARP_NATIVE_CALL obsharp_native_version(void) {
+const char *OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_native_version(void) {
 	return kVersionString;
 }
 
-int32_t OBSHARP_NATIVE_CALL obsharp_native_initialize(const char *log_tag) {
+int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_native_initialize(const char *log_tag) {
 	if (log_tag && *log_tag)
 		obsharp::SetLogTag(log_tag);
 
@@ -348,7 +348,7 @@ int32_t OBSHARP_NATIVE_CALL obsharp_native_initialize(const char *log_tag) {
 	return OBSHARP_OK;
 }
 
-int32_t OBSHARP_NATIVE_CALL obsharp_native_is_available(void) {
+int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_native_is_available(void) {
 	obsharp::BrowserPanel panel;
 	if (!SnapshotPanel(panel))
 		return 0;
@@ -356,11 +356,11 @@ int32_t OBSHARP_NATIVE_CALL obsharp_native_is_available(void) {
 	return panel.cef->initialized() ? 1 : 0;
 }
 
-const char *OBSHARP_NATIVE_CALL obsharp_native_last_error(void) {
+const char *OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_native_last_error(void) {
 	return t_lastError.c_str();
 }
 
-int32_t OBSHARP_NATIVE_CALL obsharp_native_is_ui_thread(void) {
+int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_native_is_ui_thread(void) {
 	QThread *ui = nullptr;
 	{
 		std::lock_guard<std::mutex> lock(g_mutex);
@@ -378,11 +378,11 @@ int32_t OBSHARP_NATIVE_CALL obsharp_native_is_ui_thread(void) {
 	return QThread::currentThread() == ui ? 1 : 0;
 }
 
-int32_t OBSHARP_NATIVE_CALL obsharp_native_invoke_ui(obsharp_ui_action_fn fn, void *user) {
+int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_native_invoke_ui(obsharp_ui_action_fn fn, void *user) {
 	if (!fn)
 		return Fail(OBSHARP_ERR_INVALID_ARGUMENT, "fn must not be null");
 
-	if (obsharp_native_is_ui_thread()) {
+	if (obsharp_browser_native_is_ui_thread()) {
 		fn(user);
 		return OBSHARP_OK;
 	}
@@ -400,7 +400,7 @@ int32_t OBSHARP_NATIVE_CALL obsharp_native_invoke_ui(obsharp_ui_action_fn fn, vo
 	return OBSHARP_OK;
 }
 
-int32_t OBSHARP_NATIVE_CALL obsharp_native_probe_endpoint(const char *endpoint, int32_t endpoint_kind) {
+int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_native_probe_endpoint(const char *endpoint, int32_t endpoint_kind) {
 	if (!endpoint || !*endpoint)
 		return Fail(OBSHARP_ERR_INVALID_ARGUMENT, "endpoint must not be empty");
 
@@ -422,7 +422,7 @@ int32_t OBSHARP_NATIVE_CALL obsharp_native_probe_endpoint(const char *endpoint, 
 // 浏览器生命周期
 // ---------------------------------------------------------------------------
 
-obsharp_browser *OBSHARP_NATIVE_CALL obsharp_browser_create(const obsharp_browser_options *options) {
+obsharp_browser *OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_create(const obsharp_browser_options *options) {
 	if (!options) {
 		Fail(OBSHARP_ERR_INVALID_ARGUMENT, "options must not be null");
 		return nullptr;
@@ -435,12 +435,12 @@ obsharp_browser *OBSHARP_NATIVE_CALL obsharp_browser_create(const obsharp_browse
 		return nullptr;
 	}
 
-	if (!obsharp_native_is_ui_thread()) {
+	if (!obsharp_browser_native_is_ui_thread()) {
 		Fail(OBSHARP_ERR_WRONG_THREAD, "obsharp_browser_create must be called on the Qt main thread");
 		return nullptr;
 	}
 
-	if (obsharp_native_initialize(nullptr) != OBSHARP_OK)
+	if (obsharp_browser_native_initialize(nullptr) != OBSHARP_OK)
 		return nullptr; // initialize 已经把原因写进 last error
 
 	obsharp::BrowserPanel panel;
@@ -492,15 +492,15 @@ obsharp_browser *OBSHARP_NATIVE_CALL obsharp_browser_create(const obsharp_browse
 	return browser.release();
 }
 
-void OBSHARP_NATIVE_CALL obsharp_browser_destroy(obsharp_browser *browser) {
+void OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_destroy(obsharp_browser *browser) {
 	if (!browser)
 		return;
 
-	if (!obsharp_native_is_ui_thread()) {
+	if (!obsharp_browser_native_is_ui_thread()) {
 		// 销毁会碰 Qt，又不能像其它操作那样直接返回错误（返回就等于泄漏），
 		// 所以切到 Qt 主线程上同步做完。
 		obsharp::LogWarning("obsharp_browser_destroy was called off the Qt main thread; marshalling");
-		obsharp_native_invoke_ui(&DestroyBrowserThunk, browser);
+		obsharp_browser_native_invoke_ui(&DestroyBrowserThunk, browser);
 		return;
 	}
 
@@ -513,7 +513,7 @@ void OBSHARP_NATIVE_CALL obsharp_browser_destroy(obsharp_browser *browser) {
 	delete browser;
 }
 
-void *OBSHARP_NATIVE_CALL obsharp_browser_widget(obsharp_browser *browser) {
+void *OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_widget(obsharp_browser *browser) {
 	if (!browser || !browser->widget)
 		return nullptr;
 
@@ -524,7 +524,7 @@ void *OBSHARP_NATIVE_CALL obsharp_browser_widget(obsharp_browser *browser) {
 // 浏览器操作
 // ---------------------------------------------------------------------------
 
-int32_t OBSHARP_NATIVE_CALL obsharp_browser_load(obsharp_browser *browser, const char *url) {
+int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_load(obsharp_browser *browser, const char *url) {
 	if (const int32_t result = RequireUiThread("obsharp_browser_load"); result != OBSHARP_OK)
 		return result;
 
@@ -538,7 +538,7 @@ int32_t OBSHARP_NATIVE_CALL obsharp_browser_load(obsharp_browser *browser, const
 	return OBSHARP_OK;
 }
 
-int32_t OBSHARP_NATIVE_CALL obsharp_browser_reload(obsharp_browser *browser) {
+int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_reload(obsharp_browser *browser) {
 	if (const int32_t result = RequireUiThread("obsharp_browser_reload"); result != OBSHARP_OK)
 		return result;
 
@@ -549,7 +549,7 @@ int32_t OBSHARP_NATIVE_CALL obsharp_browser_reload(obsharp_browser *browser) {
 	return OBSHARP_OK;
 }
 
-int32_t OBSHARP_NATIVE_CALL obsharp_browser_zoom(obsharp_browser *browser, int32_t direction) {
+int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_zoom(obsharp_browser *browser, int32_t direction) {
 	if (const int32_t result = RequireUiThread("obsharp_browser_zoom"); result != OBSHARP_OK)
 		return result;
 
@@ -560,7 +560,7 @@ int32_t OBSHARP_NATIVE_CALL obsharp_browser_zoom(obsharp_browser *browser, int32
 	return OBSHARP_OK;
 }
 
-int32_t OBSHARP_NATIVE_CALL obsharp_browser_execute_script(obsharp_browser *browser, const char *script) {
+int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_execute_script(obsharp_browser *browser, const char *script) {
 	if (const int32_t result = RequireUiThread("obsharp_browser_execute_script"); result != OBSHARP_OK)
 		return result;
 
@@ -574,7 +574,7 @@ int32_t OBSHARP_NATIVE_CALL obsharp_browser_execute_script(obsharp_browser *brow
 	return OBSHARP_OK;
 }
 
-int32_t OBSHARP_NATIVE_CALL obsharp_browser_set_startup_script(obsharp_browser *browser, const char *script) {
+int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_set_startup_script(obsharp_browser *browser, const char *script) {
 	if (const int32_t result = RequireUiThread("obsharp_browser_set_startup_script");
 	    result != OBSHARP_OK)
 		return result;
@@ -586,7 +586,7 @@ int32_t OBSHARP_NATIVE_CALL obsharp_browser_set_startup_script(obsharp_browser *
 	return OBSHARP_OK;
 }
 
-int32_t OBSHARP_NATIVE_CALL obsharp_browser_allow_popups(obsharp_browser *browser, int32_t allow) {
+int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_allow_popups(obsharp_browser *browser, int32_t allow) {
 	if (const int32_t result = RequireUiThread("obsharp_browser_allow_popups"); result != OBSHARP_OK)
 		return result;
 
@@ -597,7 +597,7 @@ int32_t OBSHARP_NATIVE_CALL obsharp_browser_allow_popups(obsharp_browser *browse
 	return OBSHARP_OK;
 }
 
-int32_t OBSHARP_NATIVE_CALL obsharp_browser_resize(obsharp_browser *browser, int32_t width, int32_t height) {
+int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_resize(obsharp_browser *browser, int32_t width, int32_t height) {
 	if (const int32_t result = RequireUiThread("obsharp_browser_resize"); result != OBSHARP_OK)
 		return result;
 
@@ -611,7 +611,7 @@ int32_t OBSHARP_NATIVE_CALL obsharp_browser_resize(obsharp_browser *browser, int
 	return OBSHARP_OK;
 }
 
-int32_t OBSHARP_NATIVE_CALL obsharp_browser_move(obsharp_browser *browser, int32_t x, int32_t y) {
+int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_move(obsharp_browser *browser, int32_t x, int32_t y) {
 	if (const int32_t result = RequireUiThread("obsharp_browser_move"); result != OBSHARP_OK)
 		return result;
 
@@ -622,7 +622,7 @@ int32_t OBSHARP_NATIVE_CALL obsharp_browser_move(obsharp_browser *browser, int32
 	return OBSHARP_OK;
 }
 
-int32_t OBSHARP_NATIVE_CALL obsharp_browser_set_visible(obsharp_browser *browser, int32_t visible) {
+int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_set_visible(obsharp_browser *browser, int32_t visible) {
 	if (const int32_t result = RequireUiThread("obsharp_browser_set_visible"); result != OBSHARP_OK)
 		return result;
 
@@ -633,7 +633,7 @@ int32_t OBSHARP_NATIVE_CALL obsharp_browser_set_visible(obsharp_browser *browser
 	return OBSHARP_OK;
 }
 
-int32_t OBSHARP_NATIVE_CALL obsharp_browser_post_message(obsharp_browser *browser, const char *json) {
+int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_post_message(obsharp_browser *browser, const char *json) {
 	if (const int32_t result = RequireUiThread("obsharp_browser_post_message"); result != OBSHARP_OK)
 		return result;
 
@@ -647,7 +647,7 @@ int32_t OBSHARP_NATIVE_CALL obsharp_browser_post_message(obsharp_browser *browse
 	return OBSHARP_OK;
 }
 
-const char *OBSHARP_NATIVE_CALL obsharp_browser_current_url(obsharp_browser *browser) {
+const char *OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_current_url(obsharp_browser *browser) {
 	if (!IsUsable(browser))
 		return "";
 
@@ -662,7 +662,7 @@ const char *OBSHARP_NATIVE_CALL obsharp_browser_current_url(obsharp_browser *bro
 
 namespace {
 
-void OBSHARP_NATIVE_CALL DestroyBrowserThunk(void *user) {
+void OBSHARP_BROWSER_NATIVE_CALL DestroyBrowserThunk(void *user) {
 	obsharp_browser_destroy(static_cast<obsharp_browser *>(user));
 }
 

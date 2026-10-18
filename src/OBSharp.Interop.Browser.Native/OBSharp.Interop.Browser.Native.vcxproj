@@ -112,7 +112,7 @@
     <NMakeCleanCommandLine>if exist "$(ObSharpBuildDir)\CMakeCache.txt" cmake --build "$(ObSharpBuildDir)" --config $(Configuration) --target clean</NMakeCleanCommandLine>
     <NMakeReBuildCommandLine>$(NMakeCleanCommandLine) &amp;&amp; $(NMakeBuildCommandLine)</NMakeReBuildCommandLine>
     <NMakeOutput>$(ObSharpNativeOutDir)\OBSharp.Interop.Browser.Native.dll</NMakeOutput>
-    <NMakePreprocessorDefinitions>OBSHARP_NATIVE_BUILD=1;%(NMakePreprocessorDefinitions)</NMakePreprocessorDefinitions>
+    <NMakePreprocessorDefinitions>OBSHARP_BROWSER_NATIVE_BUILD=1;%(NMakePreprocessorDefinitions)</NMakePreprocessorDefinitions>
     <NMakeIncludeSearchPath>$(ObSharpRepoRoot)\src\OBSharp.Interop.Browser.Native\include;%(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
   </PropertyGroup>
 

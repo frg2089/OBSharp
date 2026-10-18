@@ -10,7 +10,7 @@ public sealed class OBSharpNativeException : Exception
     /// 构造。
     /// </summary>
     /// <param name="result">原生返回码。</param>
-    /// <param name="message">原生 <c>obsharp_native_last_error()</c> 的内容。</param>
+    /// <param name="message">原生 <c>obsharp_browser_native_last_error()</c> 的内容。</param>
     public OBSharpNativeException(OBSharpResult result, string message)
         : base($"OBSharp.Interop.Browser.Native 调用失败（{result}）：{message}")
     {

@@ -75,8 +75,8 @@ add_library(
   src/SchemeHandler.h
   src/SchemeHandler.cpp)
 
-# 加 OBSHARP_NATIVE_BUILD 让公开头用 dllexport，否则 Windows 上啥都导不出来。
-target_compile_definitions(OBSharp.Interop.Browser.Native PRIVATE OBSHARP_NATIVE_BUILD=1)
+# 加 OBSHARP_BROWSER_NATIVE_BUILD 让公开头用 dllexport，否则 Windows 上啥都导不出来。
+target_compile_definitions(OBSharp.Interop.Browser.Native PRIVATE OBSHARP_BROWSER_NATIVE_BUILD=1)
 
 target_include_directories(
   OBSharp.Interop.Browser.Native
