@@ -1,0 +1,327 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dotnet:
+    name: .NET
+    runs-on: windows-2025-vs2026
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: ./global.json
+          cache: false
+
+      - name: 初始化 GitVersion
+        uses: gittools/actions/gitversion/setup@v4
+        with:
+          versionSpec: "6.8.x"
+          nugetConfigPath: "${{ github.workspace }}/nuget.config"
+
+      - name: 计算版本号
+        id: gitversion
+        uses: gittools/actions/gitversion/execute@v4
+
+      - name: 生成版本文件
+        shell: pwsh
+        run: |-
+          "<Project>" > Directory.Version.props
+          "  <PropertyGroup>" >> Directory.Version.props
+          "    <Version>${{ steps.gitversion.outputs.semVer }}</Version>" >> Directory.Version.props
+          "    <VersionPrefix>${{ steps.gitversion.outputs.majorMinorPatch }}</VersionPrefix>" >> Directory.Version.props
+          "    <VersionSuffix>${{ steps.gitversion.outputs.preReleaseTag }}</VersionSuffix>" >> Directory.Version.props
+          "    <PackageVersion>${{ steps.gitversion.outputs.fullSemVer }}</PackageVersion>" >> Directory.Version.props
+          "    <InformationalVersion>${{ steps.gitversion.outputs.informationalVersion }}</InformationalVersion>" >> Directory.Version.props
+          "    <AssemblyVersion>${{ steps.gitversion.outputs.assemblySemVer }}</AssemblyVersion>" >> Directory.Version.props
+          "    <FileVersion>${{ steps.gitversion.outputs.assemblySemFileVer }}</FileVersion>" >> Directory.Version.props
+          "    <RepositoryBranch>${{ steps.gitversion.outputs.branchName }}</RepositoryBranch>" >> Directory.Version.props
+          "    <RepositoryCommit>${{ steps.gitversion.outputs.sha }}</RepositoryCommit>" >> Directory.Version.props
+          "  </PropertyGroup>" >> Directory.Version.props
+          "</Project>" >> Directory.Version.props
+
+      - name: 还原 .NET 工具
+        run: dotnet tool restore
+
+      - name: 还原 .NET 项目
+        run: dotnet restore --graph --artifacts-path artifacts
+
+      - name: 编译 Interop 绑定生成器
+        run: dotnet build src/OBSharp.Interop.Generator --graph --artifacts-path artifacts --configuration Release --framework net11.0 --no-restore
+
+      - name: 生成 Interop 绑定
+        run: dotnet run --project src/OBSharp.Interop.Generator --artifacts-path artifacts --configuration Release --framework net11.0 --no-restore --no-build
+
+      - name: 编译 .NET 项目
+        run: dotnet build --graph --artifacts-path artifacts --configuration Release --framework net11.0 --no-restore
+
+      - name: 发布 Runtime
+        run: dotnet publish src/OBSharp.Runtime --graph --artifacts-path artifacts --configuration Release --framework net11.0 --no-restore --no-build
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: managed-assemblies
+          path: artifacts/publish/OBSharp.Runtime/release_net11.0/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: build-output
+          path: |-
+            Directory.Version.props
+            artifacts/
+            src/OBSharp.Interop/Generated/
+          if-no-files-found: error
+
+  native:
+    name: Native (${{ matrix.rid }})
+    needs: dotnet
+    runs-on: ${{ matrix.runs-on }}
+    defaults:
+      run:
+        shell: pwsh
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runs-on: windows-2025-vs2026
+            rid: win-x64
+            arch: x64
+            outdir: x64
+            native: OBSharp.Interop.Browser.Native.dll
+          - runs-on: windows-2025-vs2026
+            rid: win-arm64
+            arch: arm64
+            outdir: arm64
+            native: OBSharp.Interop.Browser.Native.dll
+          - runs-on: ubuntu-26.04
+            rid: linux-x64
+            arch: x86_64
+            outdir: x64
+            native: libOBSharp.Interop.Browser.Native.so
+          - runs-on: ubuntu-26.04-arm
+            rid: linux-arm64
+            arch: arm64
+            outdir: arm64
+            native: libOBSharp.Interop.Browser.Native.so
+          - runs-on: macos-26
+            rid: osx-x64
+            arch: x86_64
+            outdir: x64
+            native: libOBSharp.Interop.Browser.Native.dylib
+          - runs-on: macos-26
+            rid: osx-arm64
+            arch: arm64
+            outdir: arm64
+            native: libOBSharp.Interop.Browser.Native.dylib
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+          fetch-depth: 1
+
+      - name: 缓存原生依赖（CEF / Qt6 压缩包）
+        uses: actions/cache@v6
+        with:
+          path: |
+            lib/deps/*.zip
+            lib/deps/*.tar.xz
+          key: deps-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('lib/obs-studio/CMakePresets.json', 'cmake/ObSharpDeps.cmake') }}
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: build-output
+          path: .
+
+      - name: 安装 Linux 构建依赖
+        if: matrix.runs-on == 'ubuntu-26.04' || matrix.runs-on == 'ubuntu-26.04-arm'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends `
+            build-essential cmake ninja-build pkg-config clang zlib1g-dev `
+            qt6-base-dev libgl1-mesa-dev libglvnd-dev `
+            libx11-dev libx11-xcb-dev libxkbcommon-dev
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: ./global.json
+          cache: false
+
+      - name: 配置 Native 项目
+        run: cmake --preset ${{ matrix.rid }}
+
+      - name: 编译 Native 项目
+        run: cmake --build --preset ${{ matrix.rid }}-release
+
+      - name: 还原 Loader 项目
+        run: dotnet restore src/OBSharp.Loader --runtime ${{ matrix.rid }} --graph --artifacts-path artifacts
+
+      - name: 编译 Loader 项目
+        run: dotnet build src/OBSharp.Loader --runtime ${{ matrix.rid }} --graph --artifacts-path artifacts --configuration Release --framework net11.0 --no-restore
+
+      - name: 以 NativeAOT 发布 Loader
+        run: dotnet publish src/OBSharp.Loader --runtime ${{ matrix.rid }} --graph --artifacts-path artifacts --configuration Release --framework net11.0 --no-restore --no-build
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: OBSharp.Interop.Browser.Native-${{ matrix.rid }}
+          path: out/native/${{ matrix.outdir }}/Release/${{ matrix.native }}
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: OBSharp.Loader-${{ matrix.rid }}
+          path: artifacts/publish/OBSharp.Loader/release_net11.0_${{ matrix.rid }}/
+          if-no-files-found: error
+
+  runtime:
+    name: Package Runtime
+    needs:
+      - dotnet
+      - native
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: managed-assemblies
+          path: out/pkg/any
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: OBSharp.Interop.Browser.Native-*
+          path: out/native
+
+      - name: 整理 Runtime 包
+        shell: pwsh
+        run: |-
+          Get-ChildItem out/native -Directory | ForEach-Object {
+            $rid = $_.Name -replace '^OBSharp\.Interop\.Browser\.Native-', ''
+            $destination = "out/pkg/native/$rid"
+            New-Item -ItemType Directory -Force -Path $destination | Out-Null
+            Get-ChildItem $_.FullName -File | Move-Item -Destination $destination -Force
+          }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: runtime
+          path: out/pkg/
+          if-no-files-found: error
+
+  bundle:
+    name: Bundle
+    needs:
+      - native
+      - runtime
+    runs-on: ubuntu-26.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+          - rid: win-arm64
+          - rid: linux-x64
+          - rid: linux-arm64
+          - rid: osx-x64
+          - rid: osx-arm64
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          sparse-checkout: |-
+            src/OBSharp.Runtime/Data
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: runtime
+          path: out/runtime
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: OBSharp.Loader-${{ matrix.rid }}
+          path: out/loader
+
+      - name: 组装插件目录
+        if: ${{ !startsWith(matrix.rid, 'osx-') }}
+        shell: pwsh
+        run: |-
+          $root = "out/plugin/${{ matrix.rid }}/OBSharp"
+          $native = "out/runtime/native/${{ matrix.rid }}"
+          New-Item -ItemType Directory -Force -Path "$root/bin/64bit", "$root/bin/any", "$root/data" | Out-Null
+          Copy-Item out/loader/* "$root/bin/64bit/" -Recurse -Force
+          Copy-Item out/runtime/any/* "$root/bin/any/" -Recurse -Force
+          Copy-Item "$native/*" "$root/bin/any/" -Force
+          Copy-Item "$native/*" "$root/bin/64bit/" -Force
+          Copy-Item src/OBSharp.Runtime/Data/* "$root/data/" -Recurse -Force
+
+      - name: 组装 macOS 插件 Bundle
+        if: ${{ startsWith(matrix.rid, 'osx-') }}
+        shell: pwsh
+        run: |-
+          $rid = '${{ matrix.rid }}'
+          $nativeDir = "out/runtime/native/$rid"
+
+          $bundle = "out/plugin/$rid/OBSharp.plugin"
+          $moduleDir = "$bundle/Contents/MacOS"
+          $anyDir = "$bundle/Contents/any"
+          $resourcesDir = "$bundle/Contents/Resources"
+
+          New-Item -ItemType Directory -Force -Path $moduleDir, $anyDir, $resourcesDir | Out-Null
+
+          Copy-Item 'out/loader/*' $moduleDir -Recurse -Force
+          Move-Item "$moduleDir/OBSharp.dylib" "$moduleDir/OBSharp" -Force
+          Copy-Item "$nativeDir/*" $moduleDir -Force
+
+          Copy-Item 'out/runtime/any/*' $anyDir -Recurse -Force
+          Copy-Item "$nativeDir/*" $anyDir -Force
+          Copy-Item 'src/OBSharp.Runtime/Data/*' $resourcesDir -Recurse -Force
+
+          $plist = @'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleDevelopmentRegion</key>
+            <string>en</string>
+            <key>CFBundleExecutable</key>
+            <string>OBSharp</string>
+            <key>CFBundleIdentifier</key>
+            <string>com.obsharp.loader</string>
+            <key>CFBundleInfoDictionaryVersion</key>
+            <string>6.0</string>
+            <key>CFBundleName</key>
+            <string>OBSharp</string>
+            <key>CFBundlePackageType</key>
+            <string>BNDL</string>
+            <key>CFBundleShortVersionString</key>
+            <string>1.0.0</string>
+            <key>CFBundleVersion</key>
+            <string>1</string>
+          </dict>
+          </plist>
+          '@
+
+          [System.IO.File]::WriteAllText(
+            "$bundle/Contents/Info.plist",
+            $plist,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: OBSharp-${{ matrix.rid }}
+          path: out/plugin/${{ matrix.rid }}/
+          if-no-files-found: error
