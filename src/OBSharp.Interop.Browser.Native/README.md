@@ -195,7 +195,7 @@ cmake --build out/build/native --config Release
 |  | `linux` | `ubuntu-24.04` / `ubuntu-24.04-arm` | `OBSharp.Interop.Browser.Native-linux-{x64,arm64}`、`OBSharp.Loader-…` |
 |  | `macos` | `macos-26`（arm64 / x86_64） | `OBSharp.Interop.Browser.Native-osx-{arm64,x64}`、`OBSharp.Loader-…` |
 | 3. 收集 | `runtime-package` | `ubuntu-24.04` | `OBSharp.Runtime-package`：`any/` 放托管程序集，`native/<rid>/` 放 6 个 RID 的原生库 |
-| 4. 组装 | `bundle` | `ubuntu-24.04`（6 个 RID 并行） | `OBSharp.plugin-<rid>`：`scripts/New-PluginBundle.ps1` 摆好的插件目录 |
+| 4. 组装 | `bundle` | `ubuntu-24.04`（6 个 RID 并行） | `OBSharp.plugin-<rid>`：摆好的插件目录 |
 
 第 1 段的产物要喂给第 2 段，是因为 `src/OBSharp.Interop/Generated/` 是 git 忽略的
 （`OBSharp.Interop.Generator` 的产出），干净 checkout 上不存在：`dotnet` job 跑一次生成器
@@ -248,7 +248,7 @@ dotnet publish src/OBSharp.Runtime/OBSharp.Runtime.csproj -c Release --no-build 
   `<arch>` 跟着 `RuntimeIdentifier` 走（`win-arm64` → `arm64`），也可以 `-p:OBSharpNativeArch=`
   显式覆盖。
 
-### 插件目录怎么摆（`scripts/New-PluginBundle.ps1`）
+### 插件目录怎么摆
 
 artifact 里那份是照着 OBS 的加载规则摆好的（`libobs/obs-module.c` 找模块、
 `obs-{windows,nix,cocoa}.c` 给搜索路径）：
@@ -395,7 +395,7 @@ browser.PostMessage("""{"hello":"page"}""");
 | `../../src/OBSharp.Interop.Browser/` | 托管绑定（`OBSharpNative` / `CefBrowser` 等） |
 | `../../CMakePresets.json` | 各平台的 CMake 预设（CI 用的就是这些） |
 | `../../.github/workflows/build-native.yml` | CI：.NET 构建 → 6 个 RID 的原生矩阵（原生库 + Loader）→ 收集成跨平台 Runtime 包 → 组装插件目录 |
-| `../../scripts/New-PluginBundle.ps1` | 把原生库 + Loader + Runtime 摆成 OBS 插件目录 |
+| `../../scripts/Build-DevSymbolicLink.ps1` | 开发用：在 `out/plugin/<Rid>` 摆出上面那份目录结构（模块目录是真实文件，`bin/any`、`data` 是目录链接，改托管侧 / 数据不用重摆），再往 OBS 的插件目录里放一个目录链接指过来（Windows 用 Junction，Linux / macOS 用符号链接）—— 不用往 ProgramData / 安装目录里拷文件 |
 | `../../cmake/ObSharpDeps.cmake` | 缺 CEF / Qt6 时按 obs-studio 清单下载 |
 | `../../lib/deps/` | 下载的 CEF / Qt6（不入库，兼作压缩包缓存） |
 
