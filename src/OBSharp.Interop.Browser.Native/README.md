@@ -253,7 +253,8 @@ dotnet publish src/OBSharp.Runtime --graph --artifacts-path artifacts --configur
   `link.exe`（进 `vcvarsall x64` / `x64_arm64` 之后的环境）；Linux 要 `clang` + `zlib1g-dev`；
   macOS 要 Xcode。跨架构（`win-x64` → `win-arm64`、`osx-arm64` → `osx-x64`）可以，跨系统不行。
 * `OBSharp.Runtime` 是**框架依赖**的普通程序集（不带 `-r` 发出来就是），跑的时候由
-  Loader 用 hostfxr 拉起来，机器上要有 .NET 10 运行时。
+  Loader 用 hostfxr 拉起来，机器上要有 ASP.NET Core 10 运行时（它带着 .NET 那组，
+  宿主把两个共享框架都加载）。
 * 原生库按 RID 自动找：`OBSharp.Interop.Browser.csproj` 从 `out/native/<arch>/<Configuration>` 复制，
   `<arch>` 跟着 `RuntimeIdentifier` 走（`win-arm64` → `arm64`），也可以 `-p:OBSharpNativeArch=`
   显式覆盖。
@@ -269,7 +270,7 @@ OBSharp/                                OBSharp.plugin/
   bin/64bit/OBSharp.{dll,so}  ← 宿主      Contents/MacOS/OBSharp          ← 宿主（去掉 .dylib 后缀）
   bin/any/OBSharp.Runtime.dll ← 托管      Contents/any/OBSharp.Runtime.dll ← 托管
   bin/any/OBSharp.Interop…                Contents/any/OBSharp.Interop…
-  data/appsettings.json 等                Contents/Resources/appsettings.json 等
+  data/locale/en-US.ini 等                Contents/Resources/locale/en-US.ini 等
   bin/64bit/OBSharp.Interop.Browser.Native.*      Contents/MacOS/OBSharp.Interop.Browser.Native.*
 ```
 

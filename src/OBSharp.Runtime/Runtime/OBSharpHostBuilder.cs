@@ -1,5 +1,4 @@
 ﻿using System.Diagnostics;
-using System.Text.Json;
 
 using Microsoft.Extensions.Logging;
 
@@ -30,7 +29,7 @@ internal sealed class OBSharpHostBuilder(string dataPath)
         {
             logger.LogInformation("Building OBSharpHost.");
 
-            var options = new OBSharpHostOptions(ReadRuntimeFramework(dataPath, logger), dataPath);
+            var options = new OBSharpHostOptions(dataPath);
             OBSharpPluginManager pluginManager = new(options, loggerFactory);
 
             return new OBSharpHost(pluginManager, loggerFactory, loggerFactory.CreateLogger<OBSharpHost>());
@@ -40,34 +39,5 @@ internal sealed class OBSharpHostBuilder(string dataPath)
             logger.LogError(ex, "Building OBSharpHost failed.");
             throw;
         }
-    }
-
-    // appsettings.json 里只有运行时框架这一项（Loader 在启动 CoreCLR 之前也读同一个键）。
-    internal static RuntimeFramework ReadRuntimeFramework(string dataPath, ILogger logger)
-    {
-        string path = Path.Combine(dataPath, "appsettings.json");
-        if (!File.Exists(path))
-            return RuntimeFramework.Core;
-
-        try
-        {
-            using var document = JsonDocument.Parse(File.ReadAllBytes(path), new JsonDocumentOptions
-            {
-                CommentHandling = JsonCommentHandling.Skip,
-                AllowTrailingCommas = true,
-            });
-
-            if (document.RootElement.TryGetProperty("Runtime", out JsonElement runtime) &&
-                runtime.TryGetProperty("RuntimeFramework", out JsonElement framework) &&
-                framework.ValueKind is JsonValueKind.String &&
-                Enum.TryParse(framework.GetString(), ignoreCase: true, out RuntimeFramework value))
-                return value;
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Cannot read {Path}.", path);
-        }
-
-        return RuntimeFramework.Core;
     }
 }

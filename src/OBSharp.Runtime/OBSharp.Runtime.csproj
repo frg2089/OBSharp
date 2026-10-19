@@ -7,8 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- 只要日志抽象：宿主自己把 ILogger 转到 OBS 的 blog，不需要 DI/Configuration/Options。 -->
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <!-- 宿主固定跑在 ASP.NET Core 上（Loader 启动 CoreCLR 时带着 Microsoft.AspNetCore.App）：
+         ILogger、DI、Configuration、Options 都在共享框架里，不用再单独引包；
+         插件要用 ASP.NET Core 的类型也照着这么绑。 -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
   <ItemGroup>

@@ -44,7 +44,6 @@ public sealed class MyPlugin : ObsPlugin
     public override bool Load()
     {
         Logger.LogInformation("数据目录：{DataFolder}", DataFolder);
-        Logger.LogInformation("宿主框架：{RuntimeFramework}", Context.RuntimeFramework);
         return true;
     }
 
@@ -74,8 +73,11 @@ public sealed class MyPlugin : ObsPlugin
 | `Context` | `ObsPluginContext`，`Load()` 之后才可用 |
 | `DataFolder` | `<OB# 数据目录>/<插件名>`，附加之前已经创建好 |
 | `Logger` | 插件自己的日志，直接写进 OBS 的日志 |
-| `RuntimeFramework` | 宿主运行时框架：`Core` / `AspNet` / `WindowsDesktop` |
 | `GetText(key)` | 插件自己的本地化字符串 |
+
+宿主固定跑在 ASP.NET Core 上（`Microsoft.NETCore.App` 和 `Microsoft.AspNetCore.App` 一起加载），插件要用
+ASP.NET Core 里的类型，自己加 `<FrameworkReference Include="Microsoft.AspNetCore.App" />` 就能编译；那份程序集
+由共享框架提供，不用拷进插件目录。
 
 OB# 自己的东西（比如它作为 OBS 模块的 `obs_module_t*`）不会交给插件；插件需要什么，宿主都转成托管对象给。
 
@@ -129,5 +131,4 @@ ObsExtensions.Log(300, "hello from plugin");
 | --- | --- |
 | `ObsPlugin.cs` | 插件基类 |
 | `ObsPluginContext.cs` | 宿主交给插件的环境信息、本地化字符串 |
-| `RuntimeFramework.cs` | 宿主运行时框架 |
 | `build/OBSharp.SDK.targets` | 插件工程 Import 它（引用包时自动导入）：把宿主提供的程序集从插件输出里去掉 |

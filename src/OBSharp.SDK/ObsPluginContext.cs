@@ -9,6 +9,11 @@ namespace OBSharp;
 /// 宿主（OBSharp.Runtime）为每个插件准备好的环境信息，插件通过
 /// <see cref="ObsPlugin.Context"/> 拿到它。插件不需要自己构造。
 /// </summary>
+/// <remarks>
+/// 宿主固定跑在 ASP.NET Core 上（<c>Microsoft.AspNetCore.App</c> 随宿主一起加载），
+/// 插件要用 ASP.NET Core 里的类型，自己加
+/// <c>&lt;FrameworkReference Include="Microsoft.AspNetCore.App" /&gt;</c> 就能编译。
+/// </remarks>
 public sealed class ObsPluginContext
 {
     private const string FallbackLocale = "en-US";
@@ -17,10 +22,9 @@ public sealed class ObsPluginContext
     // 所以这里按语言名缓存，插件可以在任意线程上调用 GetText。
     private readonly ConcurrentDictionary<string, Dictionary<string, string>> _locales = new(StringComparer.OrdinalIgnoreCase);
 
-    internal ObsPluginContext(string dataFolder, RuntimeFramework runtimeFramework, ILogger logger)
+    internal ObsPluginContext(string dataFolder, ILogger logger)
     {
         DataFolder = dataFolder;
-        RuntimeFramework = runtimeFramework;
         Logger = logger;
     }
 
@@ -33,21 +37,6 @@ public sealed class ObsPluginContext
     /// 插件自己的日志，写进 OBS 的日志（<c>blog</c>），类别名是插件的类型全名。
     /// </summary>
     public ILogger Logger { get; }
-
-    /// <summary>
-    /// 宿主运行时框架。插件依赖了别的框架（比如 ASP.NET）时可以先看看宿主加载了没有。
-    /// </summary>
-    public RuntimeFramework RuntimeFramework { get; }
-
-    /// <summary>
-    /// 宿主是否加载了 Microsoft.AspNetCore.App。
-    /// </summary>
-    public bool UseAspNet => RuntimeFramework is RuntimeFramework.AspNet;
-
-    /// <summary>
-    /// 宿主是否加载了 Microsoft.WindowsDesktop.App。
-    /// </summary>
-    public bool UseWindowsDesktop => RuntimeFramework is RuntimeFramework.WindowsDesktop;
 
     /// <summary>
     /// 读取插件自己的本地化字符串：<c>&lt;DataFolder&gt;/locale/&lt;locale&gt;.ini</c>，

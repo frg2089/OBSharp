@@ -21,6 +21,14 @@ public sealed class OBSharpPluginLoadContext(
         if (HostResolver.ResolveAssemblyToPath(assemblyName) is not null)
             return null;
 
+        // 共享框架里的那几份（宿主跑在 ASP.NET Core 上，Microsoft.Extensions.* 就是从那儿来的）
+        // 不在 deps.json 里，但默认上下文早装着它们了，也不能拿插件自己那份。
+        foreach (Assembly loaded in Default.Assemblies)
+        {
+            if (string.Equals(loaded.GetName().Name, assemblyName.Name, StringComparison.Ordinal))
+                return null;
+        }
+
         string? path = _pluginResolver.ResolveAssemblyToPath(assemblyName);
         return path is null ? null : LoadFromAssemblyPath(path);
     }

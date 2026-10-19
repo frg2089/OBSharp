@@ -238,7 +238,6 @@ public sealed partial class OBSharpPluginManager
         string? description = plugin.Description;
         plugin.Attach(new ObsPluginContext(
             GetDataFolder(name),
-            _options.RuntimeFramework,
             _loggerFactory.CreateLogger(type.FullName ?? type.Name)));
         entry.SetLoaded(plugin, name, description);
 
