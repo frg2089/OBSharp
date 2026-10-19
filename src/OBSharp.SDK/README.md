@@ -113,7 +113,12 @@ CEF 连上这个应用，Widget 交给 `obs_frontend_add_dock_by_id()`，面板�
   去 `AppContext.BaseDirectory`（那是宿主目录，不是插件目录）找 `{程序集名}.staticwebassets.endpoints.json`，
   找不到会直接抛。资源本身按 `wwwroot` 解析，所以插件要按「发布」形态部署（`dotnet publish`），
   让清单和 `wwwroot` 都待在插件目录里。`MapRazorComponents<App>()` 后面跟一句
-  `WithStaticAssets(同一个路径)`，`@Assets` / `ImportMap` 才拿得到带指纹的地址。
+  `WithStaticAssets(同一个路径)`，`@Assets` 才拿得到带指纹的地址（清单里没有的 key 会原样返回，不抛）。
+- 插件是 `Library` 项目（当 Exe 的那种 apphost 不是插件），而 SDK 的
+  `_AddBlazorFrameworkStaticWebAssets` 只在 `OutputType=Exe` 时才把 `_framework/blazor.web.js`、
+  `blazor.server.js` 加进静态资源：`Library` 插件的清单里没有它们，挂
+  `<script src="_framework/blazor.web.js">` 只会 404。静态 SSR + 表单回发本来就不需要脚本
+  （浏览器直接 POST、服务端整页重渲染）；要增强导航的话得自己把包里那份 `_framework` 拷进 `wwwroot`。
 - 进程里没有 obs-browser、CEF 起不来，插件照常跑，只是没有面板（日志里会记一条）。
 
 ## 数据目录与本地化
