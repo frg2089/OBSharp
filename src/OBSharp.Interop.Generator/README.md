@@ -145,6 +145,13 @@ ObsFrontend.SetCurrentProfile("My Profile");
 - 前端 API 的 `char *` 返回值（`obs_frontend_get_current_profile` 等）在 OBS 侧是
   `bstrdup`，文档要求调用方 `bfree`；绑定里它们保持裸指针 `byte*`，不走 string 封送，
   释放责任仍然在调用方。
+- libobs 的 `const char *` 返回值（`obs_get_module_binary_path`、`obs_source_get_name`
+  等）是**借用**指针：内存归 libobs（`bstrdup` 出来挂在结构体上，由它自己释放）。
+  包装层给它们标 `[return: MarshalUsing(typeof(OBSStringMarshaller))]`——只
+  `Encoding.UTF8` 复制一份，不释放原内存。默认的 string marshaller 会把返回值当成
+  `CoTaskMemAlloc` 出来的内存、复制完再 `FreeCoTaskMem`，那就是释放别人的指针：堆损坏
+  （`0xC0000374`，ntdll 直接 fast-fail，宿主进程瞬间消失）。marshaller 是手写文件
+  `src/OBSharp.Interop/OBSStringMarshaller.cs`，不在 `Generated/` 里，不会被重新生成覆盖。
 - 输出是确定性的：跑两遍结果逐字节一致，所以重新生成可以直接当成普通 diff 来 review。
 - 实际只能在 **Windows** 上跑：include 路径是用反斜杠传的，那个自动生成的 `obsconfig.h`
   也提供的是 MSVC 风格的默认值。但**生成出来的绑定**本身是跨平台的。

@@ -306,6 +306,7 @@ internal sealed partial class Pipeline
         "using System;",
         "using System.Runtime.CompilerServices;",
         "using System.Runtime.InteropServices;",
+        "using System.Runtime.InteropServices.Marshalling;",
         "",
         "namespace OBSharp.Interop",
         "{",
@@ -1041,7 +1042,17 @@ internal sealed partial class Pipeline
         if (fn.RetNative == "const char *")
         {
             retSig = "string?";
-            retAttr = "[return: MarshalAs(UnmanagedType.LPUTF8Str)]";
+            // libobs 的 `const char *` 返回值是借用的：内存归 libobs（内部 bstrdup
+            // 出来挂在结构体上，由它自己释放），调用方只能读。LibraryImport 默认的
+            // string marshaller 会把返回值当成 CoTaskMemAlloc 出来的内存，复制成托管
+            // 字符串之后再 FreeCoTaskMem —— 释放别人的指针就是堆损坏（0xC0000374，
+            // ntdll 直接 fast-fail，OBS 一加载就没了），所以换成只 Encoding.UTF8
+            // 复制、不释放原内存的 OBSStringMarshaller（见
+            // src/OBSharp.Interop/OBSStringMarshaller.cs）。少数走 DllImport 的
+            // fn-pointer 形状不认 [MarshalUsing]，那里保持原样。
+            retAttr = useLibraryImport
+                ? "[return: MarshalUsing(typeof(OBSStringMarshaller))]"
+                : "[return: MarshalAs(UnmanagedType.LPUTF8Str)]";
         }
         else if (fn.RetNative == "_Bool")
         {
