@@ -42,6 +42,10 @@ public sealed class ObsPluginContext
             WebRootPath = Path.Combine(DataFolder, "wwwroot"),
         });
 
+        // 插件的 .NET 日志写进 OBS 日志，每行以插件标识符开头（见 ObsPluginLoggerProvider）。
+        // 默认的 console provider 留着：从终端起 OBS（或者以后单独跑插件）时还能看到。
+        builder.Logging.AddProvider(new ObsPluginLoggerProvider(Name));
+
         string endpoint = GetEndpoint();
 
         builder.WebHost.ConfigureKestrel(options =>

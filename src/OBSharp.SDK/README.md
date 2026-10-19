@@ -3,7 +3,7 @@
 写 OB# 插件要引用的就是这个项目：`ObsPlugin` 基类、宿主给插件的环境信息（`ObsPluginContext`），
 加上传递引用的 `OBSharp.Interop`（libobs 的全套绑定）、`OBSharp.Interop.Browser`
 （浏览器控件的托管绑定，原生库另说）和 `Microsoft.Extensions.Logging.Abstractions`
-（`ILogger`，不用另外加包）。
+（`ILogger`，不用另外加包，插件的日志已经接在 OBS 日志上了）。
 
 ## 引用
 
@@ -97,6 +97,25 @@ string? json = data?.GetJson();
 ObsExtensions.Log(300, "hello from plugin");
 ```
 
+## 日志
+
+插件 Web 应用（`CreateBuilder()`）的日志接在 OBS 日志上：DI 里的 `ILogger` / `ILogger<T>` / `ILoggerFactory`
+写出来的东西会落进 OBS 的日志，一行一条，以插件标识符开头，形状跟宿主自己的日志一致：
+
+```
+[MyPlugin] [INFO] MyPlugin.SomeService: 数据目录：C:\...\MyPlugin
+[MyPlugin] [WARN] MyPlugin.SomeService: ConnectionId:0HN… RequestPath:/: 面板没能起来
+```
+
+- 级别映射到 libobs 的 log level（`Information` → `LOG_INFO`(300)，`Debug` → 400，`Warning` → 200，
+  `Error` → 100，`Trace` → `LOG_LOG`(500)，`Critical` → 50）；`scope` 串在消息前面。
+  `[LoggerMessage]`、异常、结构化日志参数这些 .NET 的写法照常。
+- 过滤按 .NET 自己的规则走：`ContentRootPath` 就是数据目录，所以插件的 `appsettings.json` 里
+  `Logging:LogLevel` 说了算。默认的 console provider 没去掉，从终端起 OBS 时终端里也能看到。
+- 面板本身（`ObsPluginPanel`）的日志走同一条线，CEF 起不来之类的警告能在 OBS 日志里找到。
+- 拿不到 `ILogger` 的地方（`Load()` 里、建 builder 之前、没有 Web 应用的插件）还是直接
+  `ObsExtensions.Log(300, "…")`（见上一节）。
+
 ## 面板
 
 插件用 `CreateBuilder()` 配一个 ASP.NET Core 应用（监听在以插件名命名的命名管道 / UDS 上），
@@ -160,4 +179,6 @@ CEF 连上这个应用，Widget 交给 `obs_frontend_add_dock_by_id()`，面板�
 | `ObsPlugin.cs` | 插件基类 |
 | `ObsPluginContext.cs` | 宿主交给插件的环境信息 |
 | `ObsPluginPanel.cs` | 把插件的 Web 应用挂成 OBS 停靠面板 |
+| `ObsPluginLogger.cs` | 插件日志的落地：写进 OBS 日志，带插件标识符前缀 |
+| `ObsPluginLoggerProvider.cs` | 把上面那个接进插件 Web 应用（`CreateBuilder()` 里注册） |
 | `build/OBSharp.SDK.targets` | 插件工程 Import 它（引用包时自动导入）：把宿主提供的程序集从插件输出里去掉 |

@@ -1,0 +1,68 @@
+using System.Diagnostics;
+using System.Text;
+
+using Microsoft.Extensions.Logging;
+
+using OBSharp.Interop;
+
+namespace OBSharp;
+
+/// <summary>
+/// 插件日志的落地：把 .NET 的 <see cref="LogLevel"/> 映射到 OBS 的 log level 写进 OBS 日志，
+/// 每行是 <c>[插件标识符] [级别] 分类: 消息</c>（跟宿主的 <c>[OBSharp] ...</c> 一个形状），
+/// scope 串在消息前面。
+/// </summary>
+internal sealed class ObsPluginLogger(string pluginId, string categoryName, IExternalScopeProvider scopes) : ILogger
+{
+    // libobs 的 log level（blog 的第一个参数）：LOG_ERROR / LOG_WARNING / LOG_INFO / LOG_DEBUG / LOG_LOG。
+    private const int ObsLogError = 100;
+    private const int ObsLogWarning = 200;
+    private const int ObsLogInfo = 300;
+    private const int ObsLogDebug = 400;
+
+    // 过滤是 LoggerFactory 按 Logging:LogLevel 做掉的，到这里就写。
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public IDisposable BeginScope<TState>(TState state) where TState : notnull => scopes.Push(state);
+
+    public void Log<TState>(
+        LogLevel logLevel,
+        EventId eventId,
+        TState state,
+        Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        int obsLogLevel = logLevel switch
+        {
+            LogLevel.Trace => 500,
+            LogLevel.Debug => ObsLogDebug,
+            LogLevel.Information => ObsLogInfo,
+            LogLevel.Warning => ObsLogWarning,
+            LogLevel.Error => ObsLogError,
+            LogLevel.Critical => 50,
+            _ => -1,
+        };
+
+        if (obsLogLevel is -1)
+            return;
+
+        string level = logLevel switch
+        {
+            LogLevel.Trace => "[TRACE]",
+            LogLevel.Debug => "[DEBUG]",
+            LogLevel.Information => "[INFO]",
+            LogLevel.Warning => "[WARN]",
+            LogLevel.Error => "[ERROR]",
+            LogLevel.Critical => "[CRIT]",
+            _ => string.Empty,
+        };
+
+        var text = new StringBuilder($"[{pluginId}] {level,-5} {categoryName,-16}: ");
+        scopes.ForEachScope(static (scope, builder) => builder.Append(scope).Append(": "), text);
+        text.Append(formatter(state, exception));
+
+        string line = text.ToString();
+        Debug.WriteLine(line);
+        ObsExtensions.Log(obsLogLevel, line);
+    }
+}
