@@ -486,6 +486,9 @@ src/OBSharp.Interop/Generated/*
 # 原生（CMake / MSBuild）构建产物
 /out/
 
+# scripts/Build-Dist.ps1 摆出来的插件目录（整个挂进 OBS 的那份）
+/dist/
+
 # cmake/ObSharpDeps.cmake 下载的 CEF / Qt6 预编译包
 /lib/deps/
 
