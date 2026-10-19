@@ -266,7 +266,6 @@ jobs:
           Copy-Item "$native/*" "$root/bin/any/" -Force
           Copy-Item "$native/*" "$root/bin/64bit/" -Force
           Copy-Item src/OBSharp.Runtime/Data/* "$root/data/" -Recurse -Force
-
       - name: 组装 macOS 插件 Bundle
         if: ${{ startsWith(matrix.rid, 'osx-') }}
         shell: pwsh
@@ -282,7 +281,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $moduleDir, $anyDir, $resourcesDir | Out-Null
 
           Copy-Item 'out/loader/*' $moduleDir -Recurse -Force
-          Move-Item "$moduleDir/OBSharp.dylib" "$moduleDir/OBSharp" -Force
+          Move-Item "$moduleDir/libOBSharp.dylib" "$moduleDir/OBSharp" -Force
           Copy-Item "$nativeDir/*" $moduleDir -Force
 
           Copy-Item 'out/runtime/any/*' $anyDir -Recurse -Force
