@@ -6,7 +6,8 @@ namespace OBSharp.Interop.Browser;
 /// <summary>
 /// <c>OBSharp.Interop.Browser.Native</c> 的裸绑定，一一对应
 /// <c>src/OBSharp.Interop.Browser.Native/include/OBSharp.Interop.Browser.Native.h</c>。
-/// 不要直接用它——用 <see cref="OBSharpNative"/> / <see cref="CefBrowser"/>。
+/// 不要直接用它——用 <see cref="OBSharpNative"/> / <see cref="CefBrowser"/> /
+/// <see cref="CefDockWindow"/> / <see cref="CefToolWindow"/>。
 /// </summary>
 internal static unsafe partial class NativeMethods
 {
@@ -111,4 +112,78 @@ internal static unsafe partial class NativeMethods
     [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_browser_current_url")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial byte* BrowserCurrentUrl(nint browser);
+
+    // ---- 停靠窗口 ---------------------------------------------------------
+
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_dock_window_create")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial nint DockWindowCreate(in OBSharpDockWindowOptions options);
+
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_dock_window_destroy")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial void DockWindowDestroy(nint window);
+
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_dock_window_widget")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial nint DockWindowWidget(nint window);
+
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_dock_window_browser")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial nint DockWindowBrowser(nint window);
+
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_dock_window_show")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int DockWindowShow(nint window);
+
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_dock_window_hide")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int DockWindowHide(nint window);
+
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_dock_window_is_visible")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int DockWindowIsVisible(nint window);
+
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_dock_window_set_title",
+                   StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int DockWindowSetTitle(nint window, string? title);
+
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_dock_window_set_size")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int DockWindowSetSize(nint window, int width, int height);
+
+    // ---- 工具窗口 ---------------------------------------------------------
+
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_tool_window_create")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial nint ToolWindowCreate(in OBSharpToolWindowOptions options);
+
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_tool_window_destroy")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial void ToolWindowDestroy(nint window);
+
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_tool_window_browser")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial nint ToolWindowBrowser(nint window);
+
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_tool_window_show")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int ToolWindowShow(nint window);
+
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_tool_window_hide")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int ToolWindowHide(nint window);
+
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_tool_window_is_visible")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int ToolWindowIsVisible(nint window);
+
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_tool_window_set_title",
+                   StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int ToolWindowSetTitle(nint window, string? title);
+
+    [LibraryImport(NativeLibraryLoader.LibraryName, EntryPoint = "obsharp_tool_window_set_size")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int ToolWindowSetSize(nint window, int width, int height);
 }

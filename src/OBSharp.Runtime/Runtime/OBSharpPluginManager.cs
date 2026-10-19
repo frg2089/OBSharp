@@ -269,6 +269,12 @@ internal sealed partial class OBSharpPluginManager
             {
                 LogUnloadPluginFailed(ex, entry.AssemblyPath);
             }
+
+            // 插件自己没收拾的 host / 窗口由宿主统一收尾：插件作者可能忘了 Dispose，
+            // 而 host 的 Kestrel 和挂进 OBS 的停靠面板都不归加载上下文管，程序集卸载
+            // 之后它们还在跑。这一步不阻塞（窗口同步销毁、host 丢后台停），所以放在
+            // 释放加载上下文之前做 —— 之后再调，插件类型已经开始卸载了。
+            plugin.CloseContext();
         }
 
         OBSharpPluginLoadContext? loadContext = entry.LoadContext;

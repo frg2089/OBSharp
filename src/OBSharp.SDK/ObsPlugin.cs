@@ -55,6 +55,12 @@ public abstract class ObsPlugin
     /// <summary>
     /// 卸载插件，释放插件自己持有的非托管资源。
     /// </summary>
+    /// <remarks>
+    /// 插件自己通过 <see cref="ObsPluginContext.RegisterHost"/> 注册的 host、通过
+    /// <c>AddDockWindow</c> / <c>AddToolWindow</c> 开的窗口，由宿主在 <see cref="Unload"/>
+    /// 之后统一收尾（见 <see cref="CloseContext"/>），插件不用手动停它们；这里只管插件
+    /// 自己另外持有的东西。
+    /// </remarks>
     public virtual void Unload() { }
 
     /// <summary>
@@ -75,5 +81,31 @@ public abstract class ObsPlugin
             throw new InvalidOperationException($"Plugin \"{GetType()}\" was already attached.");
 
         _context = context;
+    }
+
+    /// <summary>
+    /// 收尾插件注册的 host / 窗口。由宿主在 <see cref="Unload"/> 之后调用。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 插件卸载（停用、回滚、宿主退出）时，宿主调完 <see cref="Unload"/> 就调这里：
+    /// 先释放插件开的窗口（停靠窗口先从 OBS 摘掉），再把 host 丢到后台停止，整个收尾
+    /// 不阻塞 OBS 的 Qt 主线程。
+    /// </para>
+    /// <para>
+    /// 幂等：多次调用无害。插件不用自己调它，自己先收拾也没关系 —— 收尾只处理还活着的对象。
+    /// </para>
+    /// </remarks>
+    internal void CloseContext()
+    {
+        try
+        {
+            _context?.Close();
+        }
+        catch (Exception ex)
+        {
+            // 卸载流程不能被收尾拖垮：收尾失败只记一笔，宿主继续卸加载上下文。
+            System.Diagnostics.Debug.WriteLine($"Closing the OB# context of plugin \"{GetType()}\" failed: {ex}");
+        }
     }
 }

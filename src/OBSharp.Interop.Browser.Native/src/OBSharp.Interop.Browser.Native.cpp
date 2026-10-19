@@ -32,6 +32,9 @@
 // ---------------------------------------------------------------------------
 
 // 一个浏览器实例。C ABI 里只有不透明指针，这里才是真实定义。
+//
+// host / scheme 由 BrowserWidget 自己记着（见 BrowserWidget.h），这里不重复存一份，
+// 免得两处状态不一致；obsharp_browser_load() 的映射与校验都走 widget。
 struct obsharp_browser {
 	std::unique_ptr<obsharp::BrowserWidget> widget;
 	obsharp_browser_callbacks callbacks{};
@@ -39,7 +42,7 @@ struct obsharp_browser {
 
 namespace {
 
-constexpr const char *kVersionString = "0.1.0";
+constexpr const char *kVersionString = "0.2.0";
 
 // 等 obs-browser 把 CEF 初始化完的上限。CEF 冷启动一般 1~3 秒。
 constexpr int kCefReadyTimeoutMs = 15000;
@@ -49,15 +52,8 @@ constexpr int kCefTaskTimeoutMs = 5000;
 // 控制消息的保留键，见 BrowserWidget.cpp 里的引导脚本。
 constexpr const char *kControlKey = "$obsharp";
 
-// 最近一次错误的描述。按线程存，免得跨线程互相覆盖。
-thread_local std::string t_lastError;
-
-void SetLastError(const std::string &message) {
-	t_lastError = message;
-}
-
 int32_t Fail(int32_t code, const std::string &message) {
-	SetLastError(message);
+	obsharp::RecordLastError(message);
 	obsharp::LogDebug(message);
 	return code;
 }
@@ -73,8 +69,6 @@ bool g_initFailed = false;
 std::string g_initError;
 QThread *g_uiThread = nullptr;
 obsharp_browser *g_activeBrowser = nullptr; // 页面消息往哪儿派发
-bool g_schemeInstalled = false;
-std::string g_schemeKey;
 
 void OBSHARP_BROWSER_NATIVE_CALL DestroyBrowserThunk(void *user);
 
@@ -239,20 +233,12 @@ bool WaitForCefReady(const obsharp::BrowserPanel &panel) {
 	return true;
 }
 
-// 注册 scheme handler。CefRegisterSchemeHandlerFactory 是「一次注册、全局生效」
-// 的（按 scheme + host 索引），所以只装一次；重复调用直接当成功。
+// 注册 scheme handler。CEF 里每个 (scheme, host) 键只能有一个 factory，所以
+// 是否已注册由 obsharp::InstallSchemeHandler() 自己记账（同键复用、端点不一致
+// 记警告）；这里只负责切到 CEF UI 线程并区分「切不过去」和「注册失败」。
 bool InstallSchemeHandlerOnce(const std::string &scheme, const std::string &domain,
 			      const obsharp::Endpoint &endpoint) {
 	const std::string key = scheme + "://" + domain;
-	{
-		std::lock_guard<std::mutex> lock(g_mutex);
-		if (g_schemeInstalled) {
-			if (g_schemeKey != key)
-				obsharp::LogWarning("a scheme handler is already registered for " +
-						    g_schemeKey + "; ignoring " + key);
-			return true;
-		}
-	}
 
 	std::string error;
 	bool installed = false;
@@ -270,13 +256,7 @@ bool InstallSchemeHandlerOnce(const std::string &scheme, const std::string &doma
 		return false;
 	}
 
-	{
-		std::lock_guard<std::mutex> lock(g_mutex);
-		g_schemeInstalled = true;
-		g_schemeKey = key;
-	}
-
-	obsharp::LogInfo("scheme handler installed for " + key);
+	obsharp::LogDebug("scheme handler ready for " + key);
 	return true;
 }
 
@@ -329,7 +309,7 @@ int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_native_initialize(const char
 		}
 
 		if (g_initFailed) {
-			SetLastError(g_initError);
+			obsharp::RecordLastError(g_initError);
 			return OBSHARP_ERR_BROWSER_UNAVAILABLE;
 		}
 
@@ -357,7 +337,7 @@ int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_native_is_available(void) {
 }
 
 const char *OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_native_last_error(void) {
-	return t_lastError.c_str();
+	return obsharp::LastErrorText();
 }
 
 int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_native_is_ui_thread(void) {
@@ -455,18 +435,29 @@ obsharp_browser *OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_create(const obshar
 		return nullptr;
 	}
 
-	const std::string scheme = (options->scheme && *options->scheme) ? options->scheme : "http";
-	const std::string domain = (options->domain && *options->domain) ? options->domain : "obsharp";
+	// 分析 host / scheme / domain / 端点 / 初始 URL。没有 host 且没给端点时跟
+	// v1 完全一样；有 host 时端点按平台从 host 推导（除非调用方显式给了）。
+	obsharp::BrowserHostConfig hostConfig;
+	{
+		std::string error;
+		if (!obsharp::ResolveBrowserHostConfig(options, hostConfig, error)) {
+			Fail(OBSHARP_ERR_INVALID_ARGUMENT, error);
+			return nullptr;
+		}
+	}
 
-	if (options->endpoint && *options->endpoint) {
+	if (hostConfig.hasEndpoint) {
 		obsharp::Endpoint endpoint;
 		std::string error;
-		if (!obsharp::NormalizeEndpoint(options->endpoint, options->endpoint_kind, endpoint, error)) {
+		// 端点种类用分析结果里的那份：有 host 且调用方没给端点时它是 Auto
+		// （按平台推导），不会被调用方顺手填错的 endpoint_kind 带偏。
+		const int32_t kind = static_cast<int32_t>(hostConfig.endpoint.kind);
+		if (!obsharp::NormalizeEndpoint(hostConfig.endpoint.address, kind, endpoint, error)) {
 			Fail(OBSHARP_ERR_INVALID_ARGUMENT, "invalid endpoint: " + error);
 			return nullptr;
 		}
 
-		if (!InstallSchemeHandlerOnce(scheme, domain, endpoint))
+		if (!InstallSchemeHandlerOnce(hostConfig.scheme, hostConfig.domain, endpoint))
 			return nullptr; // last error 已经设置好了
 	}
 
@@ -534,7 +525,12 @@ int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_load(obsharp_browser *browse
 	if (!url || !*url)
 		return Fail(OBSHARP_ERR_INVALID_ARGUMENT, "url must not be empty");
 
-	browser->widget->Load(url);
+	// url 以 obsharp:// 开头时按本浏览器的 host 映射成 CEF 形式，host 对不上
+	// 就是参数错误；普通地址原样加载。
+	std::string error;
+	if (!browser->widget->Load(url, error))
+		return Fail(OBSHARP_ERR_INVALID_ARGUMENT, "obsharp_browser_load: " + error);
+
 	return OBSHARP_OK;
 }
 

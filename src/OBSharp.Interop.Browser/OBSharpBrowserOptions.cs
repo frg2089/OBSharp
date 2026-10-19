@@ -22,4 +22,10 @@ internal unsafe struct OBSharpBrowserOptions
     public void* ParentWidget;
 
     public OBSharpBrowserCallbacks Callbacks;
+
+    /// <summary>
+    /// OB# host 名（v2 新增，可 <see langword="null"/>）。非空时按 host 推导端点、
+    /// 映射 <c>obsharp://&lt;host&gt;/...</c> 并注册该 host 的 scheme 工厂。
+    /// </summary>
+    public byte* Host;
 }

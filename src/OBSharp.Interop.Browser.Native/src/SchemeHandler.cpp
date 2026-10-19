@@ -13,14 +13,18 @@
 #include <algorithm>
 #include <climits>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <thread>
 
 namespace obsharp {
 namespace {
+
+constexpr size_t kObsharpSchemeLength = 10; // strlen("obsharp://")
 
 bool EqualsIgnoreCaseAscii(const std::string &a, const char *b);
 
@@ -553,6 +557,126 @@ bool EqualsIgnoreCaseAscii(const std::string &a, const char *b) {
 
 } // namespace
 
+// ---- host 与地址映射 -------------------------------------------------------
+
+bool IsValidHostName(const std::string &host) {
+	if (host.empty() || host.size() > 48)
+		return false;
+
+	if (host.front() == '-' || host.back() == '-')
+		return false;
+
+	for (char c : host) {
+		const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-';
+		if (!ok)
+			return false;
+	}
+
+	return true;
+}
+
+bool HasObsharpScheme(const std::string &url) {
+	return url.size() >= kObsharpSchemeLength && EqualsIgnoreCaseAscii(url.substr(0, kObsharpSchemeLength), "obsharp://");
+}
+
+bool SplitObsharpUrl(const std::string &url, std::string &host, std::string &rest) {
+	if (!HasObsharpScheme(url))
+		return false;
+
+	std::string remainder = url.substr(kObsharpSchemeLength);
+
+	// host 到第一个 '/'、'?' 或 '#' 为止（obsharp://<host>?x 也算）。
+	size_t end = remainder.find_first_of("/?#");
+	std::string name = remainder.substr(0, end);
+
+	// 端口 / 用户信息不属于 host 名，按无效处理。
+	if (name.empty() || name.find_first_of(":@") != std::string::npos)
+		return false;
+
+	host = name;
+	rest = end == std::string::npos ? std::string() : remainder.substr(end);
+	return true;
+}
+
+std::string MapToCefUrl(const std::string &scheme, const std::string &host, const std::string &rest) {
+	std::string url = scheme.empty() ? std::string("http") : scheme;
+	url += "://";
+	url += host;
+	url += ".obsharp";
+
+	if (rest.empty()) {
+		url += '/';
+	} else if (rest[0] != '/') {
+		url += '/';
+		url += rest;
+	} else {
+		url += rest;
+	}
+
+	return url;
+}
+
+std::string HostDomain(const std::string &host) {
+	return host + ".obsharp";
+}
+
+std::string DefaultEndpointForHost(const std::string &host) {
+#if defined(_WIN32)
+	return "\\\\.\\pipe\\obsharp\\" + host;
+#else
+	// 跟托管侧 ObsHost 对齐：它用 Path.GetTempPath()，也就是 TMPDIR 优先、否则 /tmp。
+	// 两边对不上的话，浏览器连的路径和 Kestrel 监听的路径就分家了。
+	const char *tmp = std::getenv("TMPDIR");
+	std::string base = (tmp && *tmp) ? std::string(tmp) : std::string("/tmp");
+	if (!base.empty() && base.back() != '/')
+		base += '/';
+
+	base += "obsharp/";
+	base += host;
+	base += ".socket";
+	return base;
+#endif
+}
+
+bool MapObsharpUrlForBrowser(const std::string &browserHost, const std::string &url, const std::string &scheme,
+			     std::string &mapped, std::string &error) {
+	if (!HasObsharpScheme(url)) {
+		mapped = url;
+		return true;
+	}
+
+	if (browserHost.empty()) {
+		error = "the URL is obsharp:// but this browser has no host; set options->host";
+		return false;
+	}
+
+	std::string host;
+	std::string rest;
+	if (!SplitObsharpUrl(url, host, rest)) {
+		error = "malformed obsharp URL: " + url;
+		return false;
+	}
+
+	if (host != browserHost) {
+		error = "the URL host \"" + host + "\" does not match the browser host \"" + browserHost + "\"";
+		return false;
+	}
+
+	mapped = MapToCefUrl(scheme, host, rest);
+	return true;
+}
+
+// ---- 已注册的 factory -----------------------------------------------------
+
+namespace {
+
+// 已经注册过的 (scheme, domain) -> 端点。CefRegisterSchemeHandlerFactory 是
+// 「一个键一个 factory、全局生效」，重复注册同一个键会失败，所以先记账再注册。
+std::mutex g_factoryMutex;
+std::map<std::string, Endpoint> g_factories;
+
+} // namespace
+
 bool InstallSchemeHandler(const std::string &scheme, const std::string &domain, const Endpoint &endpoint,
 			  MessageHandler onMessage, std::string &error) {
 	if (scheme.empty() || domain.empty()) {
@@ -560,10 +684,33 @@ bool InstallSchemeHandler(const std::string &scheme, const std::string &domain, 
 		return false;
 	}
 
+	const std::string key = scheme + "://" + domain;
+
+	{
+		std::lock_guard<std::mutex> lock(g_factoryMutex);
+		auto existing = g_factories.find(key);
+		if (existing != g_factories.end()) {
+			// 复用：factory 已经注册过，端点改不了了。端点不一致说明调用方
+			// 对同一个 host 给了两个不同的 Kestrel，记一笔警告，用第一次的。
+			if (existing->second.address != endpoint.address || existing->second.kind != endpoint.kind) {
+				LogWarning("scheme handler for " + key + " is already registered for endpoint \"" +
+					   existing->second.address + "\"; ignoring the new endpoint \"" +
+					   endpoint.address + "\"");
+			}
+
+			return true;
+		}
+	}
+
 	if (!CefRegisterSchemeHandlerFactory(CefString(scheme), CefString(domain),
 					     new KestrelSchemeHandlerFactory(endpoint, std::move(onMessage)))) {
 		error = "CefRegisterSchemeHandlerFactory(" + scheme + ", " + domain + ") failed";
 		return false;
+	}
+
+	{
+		std::lock_guard<std::mutex> lock(g_factoryMutex);
+		g_factories.emplace(key, endpoint);
 	}
 
 	return true;

@@ -14,6 +14,9 @@
 namespace obsharp {
 namespace {
 
+// 最近一次错误的描述。按线程存，免得跨线程互相覆盖。
+thread_local std::string t_lastError;
+
 // libobs 的日志级别（util/base.h）：DEBUG=400 / INFO=300 / WARNING=200 / ERROR=500。
 // 这里刻意不引入 libobs 头，所以把数值抄下来。
 constexpr int kObsDebug = 400;
@@ -84,6 +87,14 @@ void Log(LogLevel level, const std::string &message) {
 	fputs(line.c_str(), stderr);
 	fputc('\n', stderr);
 #endif
+}
+
+void RecordLastError(const std::string &message) {
+	t_lastError = message;
+}
+
+const char *LastErrorText() {
+	return t_lastError.c_str();
 }
 
 } // namespace obsharp

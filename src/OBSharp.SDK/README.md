@@ -1,9 +1,9 @@
 # OBSharp.SDK
 
-写 OB# 插件要引用的就是这个项目：`ObsPlugin` 基类、宿主给插件的环境信息（`ObsPluginContext`），
-加上传递引用的 `OBSharp.Interop`（libobs 的全套绑定）、`OBSharp.Interop.Browser`
-（浏览器控件的托管绑定，原生库另说）和 `Microsoft.Extensions.Logging.Abstractions`
-（`ILogger`，不用另外加包，插件的日志已经接在 OBS 日志上了）。
+写 OB# 插件要引用的就是这个项目：`ObsPlugin` 基类、宿主给插件的环境信息（`ObsPluginContext`）、
+host 与窗口（`ObsHost`、`ObsDockWindow`、`ObsToolWindow`），加上传递引用的 `OBSharp.Interop`
+（libobs 的全套绑定）、`OBSharp.Interop.Browser`（浏览器控件的托管绑定，原生库另说）和
+`Microsoft.Extensions.Logging.Abstractions`（`ILogger`，不用另外加包，插件的日志已经接在 OBS 日志上了）。
 
 ## 引用
 
@@ -75,6 +75,8 @@ public sealed class MyPlugin : ObsPlugin
 | `Context` | `ObsPluginContext`，`Load()` 之后才可用 |
 | `DataFolder` | `<OB# 数据目录>/<插件名>`，附加之前已经创建好 |
 | `CreateBuilder()` | 配置插件自己的 Web 应用；跑起来会挂成 OBS 的停靠面板 |
+| `Context.RegisterHost()` / `Hosts` | 注册 / 查找 host（显式的 Kestrel，见「host 与窗口」） |
+| `Context.AddDockWindow()` / `AddToolWindow()` | 开停靠面板 / 工具窗口（见「host 与窗口」） |
 
 宿主固定跑在 ASP.NET Core 上（`Microsoft.NETCore.App` 和 `Microsoft.AspNetCore.App` 一起加载），插件要用
 ASP.NET Core 里的类型，自己加 `<FrameworkReference Include="Microsoft.AspNetCore.App" />` 就能编译；那份程序集
@@ -140,6 +142,135 @@ CEF 连上这个应用，Widget 交给 `obs_frontend_add_dock_by_id()`，面板�
   （浏览器直接 POST、服务端整页重渲染）；要增强导航的话得自己把包里那份 `_framework` 拷进 `wwwroot`。
 - 进程里没有 obs-browser、CEF 起不来，插件照常跑，只是没有面板（日志里会记一条）。
 
+这个是「一个插件一个 Web 应用 + 一个面板」的便捷写法，面板 id 就是插件名。要多个面板、独立窗口、
+多个 Web 应用（多个 host），用下一节的 `RegisterHost` / `AddDockWindow` / `AddToolWindow`。
+
+## host 与窗口
+
+`CreateBuilder()` 那一套是「一个插件一个 Web 应用 + 一个面板」的便捷写法。要更细的控制就用
+host 和窗口这两组显式 API：一个插件可以注册多个 host，也可以开任意多个窗口。
+
+```csharp
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+
+using OBSharp;
+
+public sealed class MyPlugin : ObsPlugin
+{
+    private ObsDockWindow? _dock;
+    private ObsToolWindow? _tool;
+
+    public override bool Load()
+    {
+        // 只注册 host（幂等），不会自动启动；不注册 host、只开窗口也合法。
+        ObsHost host = Context.RegisterHost("mypanel");
+
+        // Builder 只能取一次；要加服务 / 中间件在这里加。
+        // 路由可以在 Build() 之后、Start() 之前挂（Kestrel 还没开始监听）。
+        WebApplication app = host.Build();
+        app.MapGet("/api/ping", () => "pong");
+
+        // 停靠面板：第一次 Show 才真正创建 CEF 浏览器。
+        _dock = Context.AddDockWindow(new ObsWindowOptions
+        {
+            Id = "mypanel",
+            Title = "我的面板",
+            Host = host,
+        });
+
+        // 工具窗口：独立顶层窗口，可以置顶。
+        _tool = Context.AddToolWindow(new ObsWindowOptions
+        {
+            Id = "mypanel-tool",
+            Title = "我的工具窗口",
+            Host = host,
+            Width = 900,
+            Height = 600,
+            Topmost = true,
+        });
+
+        host.Start();
+
+        // 第一次 Show 要等 CEF（并切到 Qt 主线程），别在 OBS 主线程上做，丢后台。
+        Task.Run(() => _dock.Show());
+
+        // 也可以开一个指向普通网站的窗口（不给 Host）。
+        Context.AddToolWindow(new ObsWindowOptions
+        {
+            Id = "help",
+            Title = "帮助",
+            Url = "https://example.com/",
+        });
+
+        return true;
+    }
+
+    public override void Unload()
+    {
+        // 不写也行：插件卸载时宿主会 Close() 掉 context，统一释放窗口和 host。
+        _dock?.Dispose();
+        _tool?.Dispose();
+    }
+}
+```
+
+### host
+
+- `Context.RegisterHost(name)` 建一个 host（同名幂等，返回同一个对象并更新配置），
+  `Context.FindHost(name)` / `Context.Hosts` 查找。host 名是 `^[a-z0-9]([a-z0-9-]{0,46}[a-z0-9])?$`。
+- 注册**不启动**：`Start()` / `StartAsync()` 才让 Kestrel 开始监听。配置用 `Builder`（只能取一次，
+  `Build` 之后取会抛），`Build()` / `Start()` 都是幂等的。
+- Kestrel 只监听 IPC 端点，不占 TCP 端口：
+  - Windows：命名管道 `\\.\pipe\obsharp\<name>`；
+  - Unix：UDS `/tmp/obsharp/<name>.socket`（启动后权限 0600）。
+- `ContentRootPath` 是插件数据目录，`wwwroot` 在 `<DataFolder>/wwwroot`，日志接
+  `ObsPluginLoggerProvider`（跟 `CreateBuilder()` 一样落进 OBS 日志）。
+- `Url` 是给插件和页面看的规范地址：`obsharp://<name>/`。
+
+### 窗口
+
+- 两种窗口：`Context.AddDockWindow()` → `ObsDockWindow`（OBS 面板，
+  `obs_frontend_add_custom_qdock()`）；`Context.AddToolWindow()` → `ObsToolWindow`
+  （独立顶层窗口，`Qt::Window | Qt::Tool`，可 `Topmost`）。
+- 共同成员：`Id`、`Title`（可读写）、`Url`、`Host`、`IsVisible`、`Show()`、`Hide()`、`Dispose()`；
+  工具窗口另有 `Resize(width, height)` 和 `CloseRequested` 事件（用户点关闭时触发，窗口只是隐藏）。
+- **懒加载**：构造窗口对象很便宜，第一次 `Show()` 才初始化 `OBSharp.Interop.Browser`、建浏览器并
+  导航（冷启动可能要等 CEF 几秒，并且会切到 Qt 主线程）。所以别在 OBS 主线程上做第一次 `Show()`；
+  用 `ShowOnCreate = true` 让它在构造时（通常从后台线程）就建好，或者从后台线程调 `Show()`。
+- **host 与窗口解耦**：
+  - 只注册 host、不开窗口：合法，就是一台给插件自己用的 Kestrel。
+  - 只开窗口、不给 `Host`、`Url` 是普通地址（`https://example.com/`）：合法，按普通网络访问。
+  - `Url` 是 `obsharp://<host>/...` 时**必须**同时给 `Host`，而且名字要对得上，否则构造时抛
+    `ArgumentException`（原生侧也会拒绝）。不给 `Url` 时默认用 `Host.Url`。
+- 创建参数里 `BrowserOptions.Host = Host?.Name`，`Endpoint` 由 host 推导
+  （Windows `\\.\pipe\obsharp\<name>`，Unix `/tmp/obsharp/<name>.socket`），`EndpointKind = Auto`。
+- 窗口能不能出来取决于环境：进程里没有 obs-browser、CEF 没起来、OBS 拒绝了停靠面板 id，都只记一条
+  警告，`Show()` 不抛，窗口对象仍然可用（`IsVisible` 是 `false`，之后再 `Show()` 会重试）。
+- 插件卸载时宿主调 `ObsPluginContext.Close()`：先释放所有窗口（停靠窗口先从 OBS 摘掉），再把所有
+  host 丢到后台停，不阻塞 OBS 主线程。自己 `Dispose()` 窗口也是安全的，多次调用是空操作。
+
+### 为什么 CEF 里实际是 `http://<host>.obsharp/`
+
+CEF 的自定义 scheme 必须在 `CefApp::OnRegisterCustomSchemes()` 里注册，而 CEF 实例属于 obs-browser
+（它只注册了 `http`），我们不改 obs-browser。所以原生库在**创建浏览器时**做一次映射：
+
+```
+obsharp://<host>/path?query   →   http://<host>.obsharp/path?query
+```
+
+并按 host 注册 `CefRegisterSchemeHandlerFactory("http", "<host>.obsharp", …)`，factory 里带着该 host
+的 IPC 端点。这样相对路径、CORS、`fetch` 全部正常（`http` 是 standard + CORS enabled），请求仍然只走
+命名管道 / UDS。`obsharp` 协议本身永远是 **InSecure** 的。
+
+注意事项：
+
+- 页面里 `window.location.href` 是 `http://<host>.obsharp/...`；引导脚本另外给了
+  `window.obsharp.host` 和 `window.obsharp.url = "obsharp://<host>/"`。
+- 页面内导航请用**相对路径**，或者写 `http://<host>.obsharp/...`；**不要**把 `obsharp://...` 写进
+  `<a href>` / `location.href`（CEF 会当外部协议处理，请求根本不发到 host）。
+- 插件 API 里一律用 `obsharp://<host>/...`，映射由原生库统一做。
+
 ## 数据目录与本地化
 
 插件的数据目录就是 `DataFolder`（`<OB# 数据目录>/<插件名>`），插件自己的配置、资源都放这里。
@@ -177,7 +308,12 @@ CEF 连上这个应用，Widget 交给 `obs_frontend_add_dock_by_id()`，面板�
 | 文件 | 内容 |
 | --- | --- |
 | `ObsPlugin.cs` | 插件基类 |
-| `ObsPluginContext.cs` | 宿主交给插件的环境信息 |
+| `ObsPluginContext.cs` | 宿主交给插件的环境信息、host 注册与窗口创建 |
+| `ObsHost.cs` | 一个 host：只监听 IPC 端点的 Kestrel（`obsharp://<name>/`） |
+| `ObsWindowOptions.cs` | 建窗口的参数（id、标题、host、URL、尺寸、置顶……） |
+| `ObsWindow.cs` | 窗口基类：懒创建、显示 / 隐藏 / 销毁、host 与 URL 解析 |
+| `ObsDockWindow.cs` | OBS 停靠面板窗口（`obs_frontend_add_custom_qdock`） |
+| `ObsToolWindow.cs` | 独立顶层工具窗口（可置顶、可 `Resize`、`CloseRequested`） |
 | `ObsPluginPanel.cs` | 把插件的 Web 应用挂成 OBS 停靠面板 |
 | `ObsPluginLogger.cs` | 插件日志的落地：写进 OBS 日志，带插件标识符前缀 |
 | `ObsPluginLoggerProvider.cs` | 把上面那个接进插件 Web 应用（`CreateBuilder()` 里注册） |

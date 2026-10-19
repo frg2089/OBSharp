@@ -16,7 +16,10 @@ public static unsafe class OBSharpNative
     /// <summary>
     /// 编译托管绑定时使用的 ABI 版本。
     /// </summary>
-    public const uint AbiVersion = 1;
+    /// <remarks>
+    /// 2 对应 host / 停靠窗口 / 工具窗口；原生库版本串是 <c>0.2.0</c>。
+    /// </remarks>
+    public const uint AbiVersion = 2;
 
     /// <summary>
     /// 解析 obs-browser、拿到面板接口，并开始等 CEF 就绪。幂等。
@@ -40,7 +43,7 @@ public static unsafe class OBSharpNative
     public static bool IsAvailable => NativeMethods.IsAvailable() != 0;
 
     /// <summary>
-    /// 封进原生库的版本串，形如 <c>0.1.0</c>。
+    /// 封进原生库的版本串，形如 <c>0.2.0</c>。
     /// </summary>
     public static string Version
         => Marshal.PtrToStringUTF8((nint)NativeMethods.Version()) ?? string.Empty;

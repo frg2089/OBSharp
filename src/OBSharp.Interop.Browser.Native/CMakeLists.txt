@@ -73,7 +73,9 @@ add_library(
   src/RuntimeHost.h
   src/RuntimeHost.cpp
   src/SchemeHandler.h
-  src/SchemeHandler.cpp)
+  src/SchemeHandler.cpp
+  src/Window.h
+  src/Window.cpp)
 
 # 加 OBSHARP_BROWSER_NATIVE_BUILD 让公开头用 dllexport，否则 Windows 上啥都导不出来。
 target_compile_definitions(OBSharp.Interop.Browser.Native PRIVATE OBSHARP_BROWSER_NATIVE_BUILD=1)

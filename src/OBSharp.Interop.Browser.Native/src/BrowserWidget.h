@@ -31,6 +31,27 @@ private:
 	StringFn onUrl_;
 };
 
+// 创建浏览器前算好的 host 相关参数。
+struct BrowserHostConfig {
+	// OB# host 名；空表示没有 host（v1 行为）。
+	std::string host;
+	// scheme handler 用的 scheme，默认 "http"。
+	std::string scheme;
+	// scheme handler 的 domain：有 host 时是 "<host>.obsharp"，否则是 options->domain。
+	std::string domain;
+	// Kestrel 端点（尚未归一化，交给 NormalizeEndpoint 处理）；没有端点时
+	// address 为空、kind 为 Auto。
+	Endpoint endpoint;
+	bool hasEndpoint = false;
+	// 交给 CEF 的初始 URL（有 host 时已经映射成 http://<host>.obsharp/...）。
+	std::string url;
+};
+
+// 分析 obsharp_browser_options：校验 host、推导端点与 domain、映射初始 URL。
+// options 为 NULL 时全部取默认值（没有 host、没有端点）。失败返回 false 并写 error。
+bool ResolveBrowserHostConfig(const obsharp_browser_options *options, BrowserHostConfig &config,
+			      std::string &error);
+
 // 一个 CEF 浏览器 Widget。
 class BrowserWidget {
 public:
@@ -47,7 +68,9 @@ public:
 	QWidget *Widget() const { return widget_; }
 	QCefWidgetApi *Cef() const { return cef_; }
 
-	void Load(const std::string &url);
+	// url 以 obsharp:// 开头时按本浏览器的 host 映射成 CEF 形式（见 SchemeHandler.h）。
+	// host 对不上返回 false 并写 error。
+	bool Load(const std::string &url, std::string &error);
 	void Reload();
 	bool Zoom(int direction);
 	void ExecuteScript(const std::string &script);
@@ -59,6 +82,8 @@ public:
 	void PostToPage(const std::string &json);
 
 	const std::string &CurrentUrl() const { return currentUrl_; }
+	const std::string &Host() const { return host_; }
+	const std::string &Scheme() const { return scheme_; }
 
 	// 页面通过 POST /__obsharp/message 发来的消息落到这里（在 CEF 的 UI 线程上
 	// 调用，见 SchemeHandler.h 的说明）。
@@ -71,11 +96,14 @@ private:
 	QCefWidgetApi *cef_ = nullptr;
 	QWidget *widget_ = nullptr;
 	std::unique_ptr<BrowserEventSink> sink_;
-	std::string currentUrl_;
+	std::string currentUrl_; // 当前（映射后的）文档地址
+	std::string host_;
+	std::string scheme_ = "http";
 	std::function<void(const std::string &)> onMessage_;
 };
 
-// 生成注入到页面的引导脚本：定义 window.obsharp.post()，再拼上用户脚本。
-std::string BuildStartupScript(const std::string &userScript);
+// 生成注入到页面的引导脚本：定义 window.obsharp.post()，有 host 时再补上
+// window.obsharp.host / window.obsharp.url，最后拼上用户脚本。
+std::string BuildStartupScript(const std::string &userScript, const std::string &host = std::string());
 
 } // namespace obsharp

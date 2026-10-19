@@ -1,7 +1,8 @@
 # OBSharp.Interop.Browser
 
 `OBSharp.Interop.Browser.Native`（原生库）的托管绑定，命名空间 `OBSharp.Interop.Browser`：
-把 obs-browser 已经初始化好的 CEF 包成 Qt Widget，交给 OB# 插件当普通 `QWidget*` 用。
+把 obs-browser 已经初始化好的 CEF 包成 Qt Widget，交给 OB# 插件当普通 `QWidget*` 用。ABI 版本
+2 起还提供停靠窗口和工具窗口的托管对象。
 
 只在**加载进 OBS 进程**时有意义（也就是 OB# 宿主所在的进程）：CEF、Qt6、obs-browser 都是
 OBS 自己那份。另起一个进程引用它，`OBSharpNative.Initialize` 只会失败。
@@ -13,15 +14,21 @@ OBS 自己那份。另起一个进程引用它，`OBSharpNative.Initialize` 只�
 
 | 类型 | 作用 |
 | --- | --- |
-| `OBSharpNative` | 库级入口：`Initialize` / `IsAvailable` / `Version` / `LastError` / `IsUiThread` / `InvokeUi` / `ProbeEndpoint` |
+| `OBSharpNative` | 库级入口：`AbiVersion` / `Initialize` / `IsAvailable` / `Version` / `LastError` / `IsUiThread` / `InvokeUi` / `ProbeEndpoint` |
 | `CefBrowser` | 一个浏览器实例（`IDisposable`）：`Widget` / `Load` / `Reload` / `Zoom` / `ExecuteScript` / `PostMessage` / `Resize` / `Move` / `SetVisible` 等 |
-| `BrowserOptions` | 建浏览器时的参数：`Url` / `Scheme` / `Domain` / `Endpoint` / `EndpointKind` / `StartupScript` / `Transparent` / `BackgroundColor` / `ParentWidget` / `Callbacks` |
-| `BrowserCallbacks` | 回调：`TitleChanged` / `UrlChanged` / `LoadEnd` / `ConsoleMessage` / `Message` |
+| `CefDockWindow` | 一个 OBS 停靠窗口（`IDisposable`）：`Create` / `Id` / `Widget` / `Browser` / `Title` / `IsVisible` / `Show` / `Hide` / `SetSize` / `Dispose` |
+| `CefToolWindow` | 一个独立顶层窗口（`IDisposable`）：`Create` / `Browser` / `Title` / `Size` / `IsVisible` / `Show` / `Hide` / `SetSize` / `CloseRequested` / `Dispose` |
+| `BrowserOptions` | 建浏览器时的参数：`Url` / `Host` / `Scheme` / `Domain` / `Endpoint` / `EndpointKind` / `StartupScript` / `Transparent` / `BackgroundColor` / `ParentWidget` / `Callbacks` |
+| `DockWindowOptions` | 建停靠窗口时的参数：`Id` / `Title` / `Visible` / `Width` / `Height` / `Callbacks` / `Browser` |
+| `ToolWindowOptions` | 建工具窗口时的参数：`Title` / `Width` / `Height` / `Visible` / `Topmost` / `Resizable` / `Callbacks` / `Browser` |
+| `BrowserCallbacks` | 浏览器回调：`TitleChanged` / `UrlChanged` / `LoadEnd` / `ConsoleMessage` / `Message` |
+| `WindowCallbacks` | 窗口回调：`CloseRequested` |
 | `OBSharpResult` / `OBSharpNativeException` | 返回码，以及失败时抛的异常 |
 | `OBSharpConsoleLevel` / `OBSharpEndpointKind` | 上面两个用到的枚举 |
 
-`NativeMethods`、`NativeLibraryLoader`、`CallbackSink`、`OBSharpBrowserOptions` 这些是内部
-实现，不对外。
+`NativeMethods`、`NativeLibraryLoader`、`CallbackSink`、`WindowCallbackSink`、
+`NativeOptionsBuffer`、`OBSharpBrowserOptions`、`OBSharpDockWindowOptions`、
+`OBSharpToolWindowOptions`、`OBSharpWindowCallbacks` 这些是内部实现，不对外。
 
 ## 引用
 
@@ -41,6 +48,24 @@ SDK 的话直接引用本工程：
 
 本工程是 AOT 友好的（`IsAotCompatible`）：`OBSharp.Loader` 是 NativeAOT，用不到这份绑定时
 会被裁掉。
+
+## host
+
+host 是「一个名字 + 一台 Kestrel」：插件看到的地址是 `obsharp://<host>/...`，原生侧把它
+映射成 `http://<host>.obsharp/...` 再交给 CEF（CEF 里的自定义 scheme 必须在 obs-browser 的
+`CefApp` 里注册，我们改不了它）。端点由 SDK 起监听：Windows 是命名管道
+`\\.\pipe\obsharp\<host>`，Unix 是 `/tmp/obsharp/<host>.socket`。
+
+`BrowserOptions.Host` 给了 host 之后：
+
+- `Endpoint` 为空时按平台从 host 推导，不用自己拼管道名；
+- `Url` 为空时用 `obsharp://<host>/`；
+- `Url` 以 `obsharp://` 开头时，里面的 host 必须与 `Host` 一致，否则抛
+  `OBSharpNativeException`（`InvalidArgument`）；
+- 页面里的引导脚本多出 `window.obsharp.host` / `window.obsharp.url`。
+
+host 和窗口彼此独立：可以只注册 host 不开窗口，也可以开窗口指向普通地址（这时 `Host`
+留空）。
 
 ## 用法
 
@@ -66,5 +91,75 @@ using var browser = CefBrowser.Create(new BrowserOptions
 nint widget = browser.Widget;
 ```
 
+### host + 停靠窗口
+
+```csharp
+using OBSharp.Interop;         // ObsFrontend.AddCustomQdock / RemoveDock 在这儿
+using OBSharp.Interop.Browser;
+
+OBSharpNative.Initialize("MyPlugin");
+
+// 建停靠窗口：原生侧建 QDockWidget（内含浏览器），这里还没挂进 OBS。
+// Create 会等 CEF 就绪（可能阻塞几秒），建议在后台线程调。
+using var dock = CefDockWindow.Create(new DockWindowOptions
+{
+    Id = "myplugin-panel",       // OBS 停靠面板 id；省略时用 host 名
+    Title = "My Plugin",         // 省略时用 host 名 / URL host
+    Width = 640,
+    Height = 480,
+    Browser = new BrowserOptions
+    {
+        Host = "myplugin",       // → obsharp://myplugin/，端点自动推导
+        Callbacks = new BrowserCallbacks
+        {
+            Message = json => Console.WriteLine($"page: {json}"),
+        },
+    },
+});
+
+// 挂进 OBS 必须在 Qt 主线程上。Widget 是 QDockWidget*（借用）。
+OBSharpNative.InvokeUi(() => ObsFrontend.AddCustomQdock("myplugin-panel", dock.Widget));
+
+// 之后可以直接操作，托管层会自己切主线程。
+dock.Show();                 // 第一次显示才真正加载页面
+dock.Title = "My Plugin 2";
+
+// 销毁前必须先从 OBS 摘掉（obs_frontend_remove_dock），否则 OBS 还引用着它。
+// 注意：CefDockWindow 故意没有终结器 —— 忘记 Dispose 只会泄漏原生对象，
+// 不会在 OBS 还引用 QDockWidget 时把它删掉。
+OBSharpNative.InvokeUi(() => ObsFrontend.RemoveDock("myplugin-panel"));
+dock.Dispose();
+```
+
+### 工具窗口
+
+```csharp
+using OBSharp.Interop.Browser;
+
+using var tool = CefToolWindow.Create(new ToolWindowOptions
+{
+    Title = "Inspector",
+    Width = 720,
+    Height = 480,
+    Visible = true,              // 创建后立刻显示
+    Topmost = true,              // 置顶
+    Browser = new BrowserOptions { Host = "myplugin", Url = "obsharp://myplugin/inspector" },
+});
+
+// 用户点关闭：窗口只是隐藏，不销毁；事件在 Qt 主线程上触发。
+tool.CloseRequested += (_, _) => Console.WriteLine("用户关掉了窗口");
+
+tool.Show();
+tool.Size = (900, 600);          // 等价于 tool.SetSize(900, 600)
+tool.Title = "Inspector 2";
+
+// 借用包装：对它 Dispose 不会销毁原生浏览器（归窗口所有）。
+CefBrowser? page = tool.Browser;
+page?.PostMessage("""{"type":"ping"}""");
+```
+
 不在 OBS 的 Qt 主线程上调用时，托管层会用 `OBSharpNative.InvokeUi` 自动切过去；
-`CefBrowser` 的成员都能直接调，不用自己判线程。
+`CefBrowser` / `CefDockWindow` / `CefToolWindow` 的成员都能直接调，不用自己判线程。只有
+`Create` 可能长时间阻塞（等 CEF 就绪），建议放到后台线程，并 catch
+`OBSharpNativeException`（进程里没有 obs-browser 时会抛，`Result` 是
+`BrowserUnavailable` / `NotInitialized`）。
