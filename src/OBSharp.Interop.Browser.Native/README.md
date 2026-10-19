@@ -1,4 +1,4 @@
-﻿# OBSharp.Interop.Browser.Native
+# OBSharp.Interop.Browser.Native
 
 一个跨平台原生动态库：把 **obs-browser 已经初始化好的 CEF** 包成 Qt Widget，交给
 OB# 的宿主插件用；页面里跑的是 Kestrel 通过命名管道 / Unix domain socket 送过来的
@@ -16,7 +16,7 @@ obs-browser 的那一份（CEF 二进制 + `cef_dll_wrapper`）和 OBS 自己带
 | --- | --- |
 | 不 vendored 新 CEF | 复用 obs-browser 的 `CEF::Library` / `CEF::Wrapper`（见 `lib/obs-studio/cmake/finders/FindCEF.cmake`）和它已经跑起来的 CEF 实例 |
 | 不重复创建 `CefApp` | 调 obs-browser 的 `QCef::init_browser()`（它内部是幂等的 `obs_browser_initialize()`），而不是 `CefInitialize` |
-| 把 ASP.NET Core 的流喂给 CEF | 注册一个 scheme handler：`http://obsharp/...` 的请求由它转成对 Kestrel endpoint 的连接 |
+| 把 ASP.NET Core 的流喂给 CEF | 注册一个 scheme handler：`https://obsharp/...` 的请求由它转成对 Kestrel endpoint 的连接（不走 TLS） |
 | 只要 `QWidget*`，不要 dock 封装 | `obsharp_browser_widget()` 直接把底层 `QCefWidget` 交出去，父级 / dock 由调用方决定 |
 
 ## 架构
@@ -31,7 +31,7 @@ obs-browser 的那一份（CEF 二进制 + `cef_dll_wrapper`）和 OBS 自己带
 │    ├─ RuntimeHost    运行时解析 obs-browser 模块里的 QCef
 │    ├─ HostApi        obs-browser 面板接口（QCef/QCefWidget）声明
 │    ├─ BrowserWidget  QCefWidget 子类 + 引导脚本注入
-│    ├─ SchemeHandler  http://obsharp/* → Kestrel
+│    ├─ SchemeHandler  https://obsharp/* → Kestrel
 │    └─ KestrelClient  命名管道 / UDS 上的最小 HTTP/1.1 客户端
 │         │
 │         │  跨进程 / 跨线程：命名管道（Win）或 UDS（Unix）
@@ -44,7 +44,7 @@ obs-browser 的那一份（CEF 二进制 + `cef_dll_wrapper`）和 OBS 自己带
 页面方向：
 
 * **页面 → 原生**：引导脚本把 `window.obsharp.post(json)` 变成
-  `POST http://obsharp/__obsharp/message`；scheme handler 拦下来，转给当前浏览器。
+  `POST https://obsharp/__obsharp/message`；scheme handler 拦下来，转给当前浏览器。
   页面 `console.*` 和文档 `load` 事件也走同一个控制通道（JSON 里带保留字段
   `$obsharp`）。
 * **原生 → 页面**：`obsharp_browser_post_message()` 把 JSON 用
@@ -315,7 +315,7 @@ OBSharpNative.Initialize("MyPlugin");
 using var browser = CefBrowser.Create(new BrowserOptions
 {
     Endpoint = "obsharp-myplugin",                 // Kestrel 监听的命名管道名 / UDS 路径
-    Url = "http://obsharp/",                        // 省略时按 <scheme>://<domain>/
+    Url = "https://obsharp/",                       // 省略时按 <scheme>://<domain>/（默认 https）
     StartupScript = "console.log('from native')",
     Callbacks = new BrowserCallbacks
     {
@@ -358,9 +358,16 @@ browser.PostMessage("""{"hello":"page"}""");
 ## 已知限制
 
 * **WebSocket 不走 scheme handler**。CEF 的 `CefSchemeHandlerFactory` 只覆盖普通
-  请求；页面的 WebSocket 连接不会经过我们的 Kestrel 客户端。需要双向实时通道时用
+  请求；页面的 WebSocket 连接走 Chromium 独立的 connector，会自己去做 TLS 握手，
+  压根不进我们的 `KestrelResourceHandler`。所以 `ws://` / `wss://<host>.obsharp/`
+  都连不上（前者还会被 https 页面的混合内容策略拦掉）。需要双向实时通道时用
   `window.obsharp.post()` / `CustomEvent("obsharp-message")` 这条消息通道，或者让
-  Kestrel 另开一个真实的 TCP 监听。
+  Kestrel 另开一个真实的 TCP 监听（页面连 `ws://127.0.0.1:<port>/...`——回环地址
+  不受混合内容限制，`isSecureContext` 也不受影响）。
+* **`https` 是「假」的 https**。页面来源是 `https://<host>.obsharp/`，但没有证书、
+  没有 TLS 握手：请求由本库的 scheme handler 直接接住转给 IPC。所以它只用来拿到
+  **安全上下文**（`crypto.subtle` / `serviceWorker` / `clipboard` 这些 API 需要），
+  不要指望它能防窃听——本来数据就在同一进程/本机的命名管道里。
 * **同一个 scheme+host 只能有一个 factory**。scheme handler 是全局的，本库用
   `g_activeBrowser` 把消息派给当前浏览器；同进程里同时开多个浏览器时，页面消息会被
   路由到最近一次创建/激活的那个。
@@ -398,7 +405,7 @@ browser.PostMessage("""{"hello":"page"}""");
 | `src/RuntimeHost.{h,cpp}` | 运行时解析 obs-browser 模块、取 `blog` / `obs_*` 符号 |
 | `src/HostApi.{h,cpp}` | 复刻 obs-browser 的面板接口（`QCef` / `QCefWidget` 虚表） |
 | `src/BrowserWidget.{h,cpp}` | `QCefWidget` 子类 + 引导脚本（`$obsharp` 控制通道） |
-| `src/SchemeHandler.{h,cpp}` | `http://<scheme-host>/*` → Kestrel |
+| `src/SchemeHandler.{h,cpp}` | `<scheme>://<host>/*` → Kestrel（默认 https，不做 TLS） |
 | `src/KestrelClient.{h,cpp}` | 命名管道 / UDS 上的最小 HTTP/1.1 客户端 |
 | `src/Log.{h,cpp}` | 转发到 libobs 的 `blog` |
 | `CMakeLists.txt` | CMake 构建 |

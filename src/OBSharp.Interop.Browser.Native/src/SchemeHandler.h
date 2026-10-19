@@ -18,9 +18,13 @@ using MessageHandler = std::function<void(const std::string &json)>;
 // ---- host 与地址映射 -------------------------------------------------------
 //
 // 插件看到的规范地址是 obsharp://<host>/<path>；CEF 里实际访问的是
-// http://<host>.obsharp/<path>（原因见公开头与 README：obsharp 没法注册成
-// standard scheme，而 obs-browser 的 CefApp 已经把 http 注册成
-// standard + CORS enabled）。下面几个函数就是这两者之间的换算。
+// https://<host>.obsharp/<path>。下面几个函数就是这两者之间的换算。
+//
+// 为什么是 https 而不是 http：https 是安全上下文，页面才能用 crypto.subtle /
+// serviceWorker / clipboard 这些只在安全上下文开放的 API。而这里的 https 请求
+// 由我们的 scheme handler 接住直接转给命名管道 / UDS，**不做 TLS、不走网络栈**，
+// 所以没有加解密开销。CEF 允许给内置 scheme 注册 factory，只有 factory 返回
+// nullptr 时才回落到真正的网络传输（见 cef_scheme.h 的说明）。
 
 // OB# 的 host 名：^[a-z0-9]([a-z0-9-]{0,46}[a-z0-9])?$，即小写字母 / 数字 /
 // 连字符，1~48 个字符，首尾不能是连字符。
@@ -34,7 +38,7 @@ bool HasObsharpScheme(const std::string &url);
 bool SplitObsharpUrl(const std::string &url, std::string &host, std::string &rest);
 
 // 映射成 CEF 里实际访问的地址：<scheme>://<host>.obsharp<rest>。
-// rest 为空时补 "/"，不以 '/' 开头时也补一个；scheme 为空时用 "http"。
+// rest 为空时补 "/"，不以 '/' 开头时也补一个；scheme 为空时用 "https"。
 std::string MapToCefUrl(const std::string &scheme, const std::string &host, const std::string &rest);
 
 // host 对应的 scheme handler domain："<host>.obsharp"。
@@ -54,11 +58,13 @@ bool MapObsharpUrlForBrowser(const std::string &browserHost, const std::string &
 
 // 把 <scheme>://<domain>/... 上的请求通过命名管道 / UDS 转给 Kestrel。
 //
-// 为什么不注册一个自己的 scheme：obs-browser 的 CefApp 已经把 "http" 注册成
-// standard + CORS enabled，并且用 CefRegisterSchemeHandlerFactory("http",
-// "absolute", ...) 给自己留了后门。我们照做，按 host 用不会撞车的 domain
-// （"<host>.obsharp"）挂自己的 factory，就能直接复用已有的 scheme 注册，不必
-// 自己搞一个 CefApp。没有 host 的老式调用仍然用 <scheme>://<domain>。
+// 有 host 时 scheme 是 "https"、domain 是 "<host>.obsharp"：https 是 CEF / Chromium
+// 的内置 scheme，**可以**给它注册 scheme handler factory —— cef_scheme.h 写明
+// 「如果 scheme 是内置的，且 factory 没返回 handler，才回落到内置的 scheme handler」。
+// 我们的 factory 总是返回 handler，所以请求根本不会进网络栈，也就没有 TLS 握手。
+// 这样页面拿到的来源是 https（安全上下文），实际数据走的是明文 IPC。
+//
+// 没有 host 的老式调用仍然用调用方给的 <scheme>://<domain>（默认 https + obsharp）。
 //
 // 必须在 CEF 的 UI 线程上调用（CefRegisterSchemeHandlerFactory 的要求）。
 //
@@ -69,6 +75,9 @@ bool MapObsharpUrlForBrowser(const std::string &browserHost, const std::string &
 // 注意：MessageHandler 也是按 factory 全局唯一的；多个浏览器共用本库在
 // OBSharp.Interop.Browser.Native.cpp 里的那个派发器，所以同一个页面消息不会
 // 因为建了第二个浏览器就丢。
+//
+// 已知限制：WebSocket 不经过 scheme handler（CEF 的 WebSocket 走独立的 connector，
+// 会自己去做 TLS 握手），所以 wss://<host>.obsharp/ 连不上。见 README「已知限制」。
 bool InstallSchemeHandler(const std::string &scheme, const std::string &domain, const Endpoint &endpoint,
 			  MessageHandler onMessage, std::string &error);
 

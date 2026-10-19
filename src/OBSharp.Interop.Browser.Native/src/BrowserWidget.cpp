@@ -24,7 +24,7 @@ namespace {
 // 「加载结束」和「console 消息」这两类事件也走同一条通道：带 "$obsharp" 键的
 // JSON 是控制消息（native 侧解析后派发），其余原样交给 on_message。
 //
-// 有 host 时（OB# 的 obsharp:// 协议）CEF 里实际是 http://<host>.obsharp/，
+// 有 host 时（OB# 的 obsharp:// 协议）CEF 里实际是 https://<host>.obsharp/，
 // 所以脚本里另外给出 window.obsharp.host 与 window.obsharp.url（规范地址），
 // 让页面知道插件 API 那一侧的写法。__host__ 这一行由 BuildStartupScript() 替换。
 constexpr const char *kBootstrapScript = R"JS(
@@ -139,11 +139,15 @@ const char *NonEmpty(const char *value) {
 bool ResolveBrowserHostConfig(const obsharp_browser_options *options, BrowserHostConfig &config,
 			      std::string &error) {
 	config = BrowserHostConfig();
-	config.scheme = "http";
+	// 默认 https：页面因此落在安全上下文里（crypto.subtle / serviceWorker /
+	// clipboard 这些只在安全上下文开放的 API 才能用），但**并不做 TLS** ——
+	// https 的请求由本库的 scheme handler 接住，直接转给 IPC 端点，不走网络栈、
+	// 也不握手。调用方仍可以用 options->scheme 覆盖。
+	config.scheme = "https";
 	config.domain = "obsharp";
 
 	if (!options) {
-		config.url = "http://obsharp/";
+		config.url = "https://obsharp/";
 		return true;
 	}
 
@@ -204,7 +208,7 @@ bool ResolveBrowserHostConfig(const obsharp_browser_options *options, BrowserHos
 	}
 
 	// 交给 CEF 的初始 URL：url 为空时按 host / scheme+domain 推默认地址；给了
-	// url 就把 obsharp://<host>/... 映射成 http://<host>.obsharp/...
+	// url 就把 obsharp://<host>/... 映射成 https://<host>.obsharp/...
 	if (!urlField) {
 		config.url = config.host.empty() ? config.scheme + "://" + config.domain + "/"
 						 : MapToCefUrl(config.scheme, config.host, std::string());

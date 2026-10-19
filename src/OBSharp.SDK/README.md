@@ -250,26 +250,37 @@ public sealed class MyPlugin : ObsPlugin
 - 插件卸载时宿主调 `ObsPluginContext.Close()`：先释放所有窗口（停靠窗口先从 OBS 摘掉），再把所有
   host 丢到后台停，不阻塞 OBS 主线程。自己 `Dispose()` 窗口也是安全的，多次调用是空操作。
 
-### 为什么 CEF 里实际是 `http://<host>.obsharp/`
+### 为什么 CEF 里实际是 `https://<host>.obsharp/`（但并没有加密）
 
-CEF 的自定义 scheme 必须在 `CefApp::OnRegisterCustomSchemes()` 里注册，而 CEF 实例属于 obs-browser
-（它只注册了 `http`），我们不改 obs-browser。所以原生库在**创建浏览器时**做一次映射：
+`obsharp://` 不是 Chromium 认识的 scheme，没法直接加载，所以原生库在**创建浏览器时**做一次映射：
 
 ```
-obsharp://<host>/path?query   →   http://<host>.obsharp/path?query
+obsharp://<host>/path?query   →   https://<host>.obsharp/path?query
 ```
 
-并按 host 注册 `CefRegisterSchemeHandlerFactory("http", "<host>.obsharp", …)`，factory 里带着该 host
-的 IPC 端点。这样相对路径、CORS、`fetch` 全部正常（`http` 是 standard + CORS enabled），请求仍然只走
-命名管道 / UDS。`obsharp` 协议本身永远是 **InSecure** 的。
+并按 host 注册 `CefRegisterSchemeHandlerFactory("https", "<host>.obsharp", …)`，factory 里带着该 host
+的 IPC 端点。`https` 是 CEF / Chromium 的内置 scheme，**允许**挂 scheme handler factory——只有当
+factory 返回 `nullptr` 时才会回落到真正的网络传输。我们的 factory 总是返回 handler，所以请求被直接
+转给命名管道 / UDS，**压根不进网络栈、不做 TLS 握手、没有加解密开销**。
+
+之所以选 `https` 而不是 `http`：只有 https（以及 localhost 之类的可信来源）才算
+[安全上下文](https://developer.mozilla.org/docs/Web/Security/Secure_Contexts)。
+选 `http` 的话 `isSecureContext` 是 `false`，`crypto.subtle`、`navigator.serviceWorker`、
+`navigator.clipboard`、`PublicKeyCredential` 这些 API 全部不可用。用 `https` 之后它们都能用，
+而传输仍然是明文 IPC。
 
 注意事项：
 
-- 页面里 `window.location.href` 是 `http://<host>.obsharp/...`；引导脚本另外给了
+- 页面里 `window.location.href` 是 `https://<host>.obsharp/...`；引导脚本另外给了
   `window.obsharp.host` 和 `window.obsharp.url = "obsharp://<host>/"`。
-- 页面内导航请用**相对路径**，或者写 `http://<host>.obsharp/...`；**不要**把 `obsharp://...` 写进
-  `<a href>` / `location.href`（CEF 会当外部协议处理，请求根本不发到 host）。
+- 页面内导航请用**相对路径**，或者写 `https://<host>.obsharp/...`；**不要**把 `obsharp://...` 写进
+  `<a href>` / `location.href`（Chromium 不认识这个 scheme，会当外部协议处理）。
 - 插件 API 里一律用 `obsharp://<host>/...`，映射由原生库统一做。
+- 想退回明文来源（不安全上下文），可以在 `BrowserOptions` 里显式设 `Scheme = "http"`。
+- **WebSocket 不通**：`ws` / `wss` 不经过 scheme handler（Chromium 的 WebSocket 走独立 connector，
+  会自己做 TLS 握手），所以 `wss://<host>.obsharp/` 连不上。需要双向实时通道时用
+  `window.obsharp.post()` / `CustomEvent("obsharp-message")`，或者让 Kestrel 另开一个真实的 TCP 监听
+  （页面连 `ws://127.0.0.1:<port>/...`，回环地址不受混合内容限制）。
 
 ## 数据目录与本地化
 

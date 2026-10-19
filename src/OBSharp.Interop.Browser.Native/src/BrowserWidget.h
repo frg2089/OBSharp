@@ -35,7 +35,7 @@ private:
 struct BrowserHostConfig {
 	// OB# host 名；空表示没有 host（v1 行为）。
 	std::string host;
-	// scheme handler 用的 scheme，默认 "http"。
+	// scheme handler 用的 scheme，默认 "https"（页面因此在安全上下文里，但不做 TLS）。
 	std::string scheme;
 	// scheme handler 的 domain：有 host 时是 "<host>.obsharp"，否则是 options->domain。
 	std::string domain;
@@ -43,7 +43,7 @@ struct BrowserHostConfig {
 	// address 为空、kind 为 Auto。
 	Endpoint endpoint;
 	bool hasEndpoint = false;
-	// 交给 CEF 的初始 URL（有 host 时已经映射成 http://<host>.obsharp/...）。
+	// 交给 CEF 的初始 URL（有 host 时已经映射成 https://<host>.obsharp/...）。
 	std::string url;
 };
 
@@ -98,7 +98,7 @@ private:
 	std::unique_ptr<BrowserEventSink> sink_;
 	std::string currentUrl_; // 当前（映射后的）文档地址
 	std::string host_;
-	std::string scheme_ = "http";
+	std::string scheme_ = "https";
 	std::function<void(const std::string &)> onMessage_;
 };
 

@@ -60,7 +60,7 @@ int32_t Fail(int32_t code, const std::string &message) {
 
 // 从浏览器参数里猜窗口所属的 host：优先 host 字段，其次 URL 的 host。
 //
-// URL 可能已经被映射成 CEF 里的 http://<host>.obsharp/（比如调用方自己先算过），
+// URL 可能已经被映射成 CEF 里的 https://<host>.obsharp/（比如调用方自己先算过），
 // 所以顺带把 ".obsharp" 后缀摘掉，让 id / title 看起来还是 OB# 的 host 名。
 std::string ResolveHostName(const obsharp_browser_options &browser) {
 	if (browser.host && *browser.host)

@@ -599,7 +599,7 @@ bool SplitObsharpUrl(const std::string &url, std::string &host, std::string &res
 }
 
 std::string MapToCefUrl(const std::string &scheme, const std::string &host, const std::string &rest) {
-	std::string url = scheme.empty() ? std::string("http") : scheme;
+	std::string url = scheme.empty() ? std::string("https") : scheme;
 	url += "://";
 	url += host;
 	url += ".obsharp";

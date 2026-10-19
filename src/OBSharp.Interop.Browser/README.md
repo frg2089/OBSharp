@@ -52,9 +52,14 @@ SDK 的话直接引用本工程：
 ## host
 
 host 是「一个名字 + 一台 Kestrel」：插件看到的地址是 `obsharp://<host>/...`，原生侧把它
-映射成 `http://<host>.obsharp/...` 再交给 CEF（CEF 里的自定义 scheme 必须在 obs-browser 的
-`CefApp` 里注册，我们改不了它）。端点由 SDK 起监听：Windows 是命名管道
+映射成 `https://<host>.obsharp/...` 再交给 CEF。端点由 SDK 起监听：Windows 是命名管道
 `\\.\pipe\obsharp\<host>`，Unix 是 `/tmp/obsharp/<host>.socket`。
+
+用 `https` 是因为它让页面落在**安全上下文**里（`crypto.subtle` / `serviceWorker` / `clipboard`
+这些只在安全上下文开放的 API 才能用）。但**并没有加密**：`https` 是 CEF 的内置 scheme，我们给它
+注册了 scheme handler factory，factory 总是返回 handler，所以请求被直接转给 IPC 端点——不进网络栈、
+不做 TLS 握手。`http` 是 chromium 早就注册好的 standard scheme，看起来更"现成"，但它让页面落在
+**不安全上下文**里，那些 API 全部不可用，所以默认改成 `https`。
 
 `BrowserOptions.Host` 给了 host 之后：
 
@@ -63,6 +68,10 @@ host 是「一个名字 + 一台 Kestrel」：插件看到的地址是 `obsharp:
 - `Url` 以 `obsharp://` 开头时，里面的 host 必须与 `Host` 一致，否则抛
   `OBSharpNativeException`（`InvalidArgument`）；
 - 页面里的引导脚本多出 `window.obsharp.host` / `window.obsharp.url`。
+
+**WebSocket 不通**：`ws` / `wss` 不经过 scheme handler（Chromium 的 WebSocket 走独立 connector，
+会自己做 TLS 握手），所以 `wss://<host>.obsharp/` 连不上。需要双向实时通道时用
+`window.obsharp.post()` / `CustomEvent("obsharp-message")`，或者让 Kestrel 另开真实 TCP 监听。
 
 host 和窗口彼此独立：可以只注册 host 不开窗口，也可以开窗口指向普通地址（这时 `Host`
 留空）。
@@ -79,7 +88,7 @@ OBSharpNative.Initialize("MyPlugin");
 using var browser = CefBrowser.Create(new BrowserOptions
 {
     Endpoint = "obsharp-myplugin",  // Kestrel 监听的命名管道名 / UDS 路径
-    Url = "http://obsharp/",        // 省略时按 <scheme>://<domain>/
+    Url = "https://obsharp/",       // 省略时按 <scheme>://<domain>/（默认 https）
     Callbacks = new BrowserCallbacks
     {
         Message = json => Console.WriteLine($"page: {json}"),

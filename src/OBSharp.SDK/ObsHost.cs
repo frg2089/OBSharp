@@ -31,7 +31,14 @@ namespace OBSharp;
 /// <para>
 /// 一个 host 同时是 CEF 里 scheme handler 的端点：浏览器访问
 /// <c>obsharp://&lt;name&gt;/...</c> 时，原生库把它映射成
-/// <c>http://&lt;name&gt;.obsharp/...</c> 再转给这里的命名管道 / UDS。
+/// <c>https://&lt;name&gt;.obsharp/...</c> 再转给这里的命名管道 / UDS。
+/// </para>
+/// <para>
+/// 之所以在 CEF 里是 <c>https</c>：那只是让页面落在<b>安全上下文</b>里（否则
+/// <c>crypto.subtle</c> / <c>serviceWorker</c> / <c>clipboard</c> 这些 API 用不了）。
+/// 这些 https 请求由原生库的 scheme handler 直接接住转给 IPC 端点，<b>不做 TLS</b>、
+/// 不上网络栈，所以没有任何加解密开销。插件和页面里写地址时仍然用 <see cref="Url"/>
+/// （<c>obsharp://</c>），映射由原生库统一做。
 /// </para>
 /// </remarks>
 public sealed partial class ObsHost : IAsyncDisposable
@@ -64,7 +71,7 @@ public sealed partial class ObsHost : IAsyncDisposable
     public string Name { get; }
 
     /// <summary>
-    /// 插件和页面用的规范地址：<c>obsharp://&lt;name&gt;/</c>。这个协议永远是 InSecure 的。
+    /// 插件和页面用的规范地址：<c>obsharp://&lt;name&gt;/</c>。
     /// </summary>
     public string Url { get; }
 

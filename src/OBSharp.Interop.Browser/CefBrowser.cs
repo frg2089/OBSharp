@@ -122,7 +122,7 @@ public sealed unsafe class CefBrowser : IDisposable
 
     /// <summary>
     /// 导航到 <paramref name="url"/>。传 <c>obsharp://&lt;host&gt;/...</c> 时会按该浏览器的
-    /// host 映射成 <c>http://&lt;host&gt;.obsharp/...</c>。
+    /// host 映射成 <c>https://&lt;host&gt;.obsharp/...</c>（仍然走 IPC、不做 TLS）。
     /// </summary>
     public void Load(string url)
     {

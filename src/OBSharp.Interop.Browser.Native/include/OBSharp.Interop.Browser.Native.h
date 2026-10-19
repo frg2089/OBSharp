@@ -30,12 +30,21 @@
  * -----------
  *   * host 是「一个名字 + 一台 Kestrel」。端点由 OB# 的托管侧（SDK）起监听：
  *     Windows 是命名管道 \\.\pipe\obsharp\<host>，Unix 是 /tmp/obsharp/<host>.socket。
- *   * 插件看到的地址是 obsharp://<host>/...（永远是 InSecure 的）。
- *   * CEF 里实际访问的是 http://<host>.obsharp/...：CEF 自定义 scheme 必须在
- *     CefApp::OnRegisterCustomSchemes() 里注册，而 CefApp 是 obs-browser 的（它只
- *     注册了 http），所以本库把 obsharp://<host>/... 映射成 http://<host>.obsharp/...
- *     再交给 CEF，并为每个 host 注册一个带该 host 端点的 scheme handler factory。
+ *   * 插件看到的地址是 obsharp://<host>/...。
+ *   * CEF 里实际访问的是 https://<host>.obsharp/...，但**不做 TLS**：https 是
+ *     CEF / Chromium 的内置 scheme，可以给它注册 scheme handler factory；我们的
+ *     factory 总是返回 handler，所以请求被直接转给该 host 的命名管道 / UDS，压根
+ *     不进网络栈、不握手、不加解密。对页面来说来源是 https，因此落在安全上下文里
+ *     （crypto.subtle / serviceWorker / clipboard 这些 API 可用），而实际传输仍是
+ *     明文的进程内 IPC，没有加密开销。
  *   * host 和窗口彼此独立：可以只注册 host 不开窗口，也可以开窗口指向普通地址。
+ *
+ * 已知限制
+ * --------
+ *   * WebSocket 不经过 scheme handler：CEF 的 WebSocket 走独立的 connector，会自己
+ *     去做 TLS 握手。所以 wss://<host>.obsharp/ 连不上，页面要双向实时通道请用
+ *     window.obsharp.post() / CustomEvent("obsharp-message")，或者自己起一个真实的
+ *     TCP 监听。
  */
 
 #pragma once
@@ -136,13 +145,16 @@ typedef struct obsharp_browser_callbacks {
 typedef struct obsharp_browser_options {
 	uint32_t size;
 
-	/* 初始 URL。为 NULL 时用 "obsharp://<host>/"，没有 host 时用 "http://<domain>/"。 */
+	/* 初始 URL。为 NULL 时用 "obsharp://<host>/"，没有 host 时用 "<scheme>://<domain>/"。 */
 	const char *url;
 	/*
 	 * 自定义 scheme handler 注册用的 scheme 与 host：
 	 * 凡是 <scheme>://<domain>/... 的请求都会转到 Kestrel 的 endpoint。
-	 * scheme 省略时用 "http"（obs-browser 已把它注册成 standard + CORS
-	 * enabled，所以能直接复用）；domain 省略时用 "obsharp"。
+	 *
+	 * scheme 省略时用 "https"：它是 CEF 的内置 scheme，可以挂 scheme handler
+	 * factory，页面因此落在安全上下文里；请求由本库直接转给 IPC 端点，**不做
+	 * TLS**。想退回旧行为（http）可以显式传 "http"。
+	 * domain 省略时用 "obsharp"。
 	 *
 	 * 给了 host（见下面的 host 字段）时 domain 被忽略：实际注册的是
 	 * "<host>.obsharp"。
@@ -314,7 +326,8 @@ OBSHARP_BROWSER_NATIVE_API void *OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_wid
 
 /*
  * 导航到 url。url 以 "obsharp://" 开头时按该浏览器的 host 映射成
- * http://<host>.obsharp/...；host 对不上返回 OBSHARP_ERR_INVALID_ARGUMENT。
+ * https://<host>.obsharp/...（仍走 IPC、不做 TLS）；host 对不上返回
+ * OBSHARP_ERR_INVALID_ARGUMENT。
  */
 OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL
 obsharp_browser_load(obsharp_browser *browser, const char *url);

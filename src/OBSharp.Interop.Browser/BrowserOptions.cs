@@ -9,14 +9,25 @@ public sealed class BrowserOptions
     /// <summary>
     /// 初始 URL。为 <see langword="null"/> 时用 <c>obsharp://&lt;host&gt;/</c>（给了
     /// <see cref="Host"/> 的话），否则用 <c>&lt;scheme&gt;://&lt;domain&gt;/</c>
-    /// （默认 <c>http://obsharp/</c>）。
+    /// （默认 <c>https://obsharp/</c>）。
     /// </summary>
     public string? Url { get; init; }
 
     /// <summary>
-    /// 自定义 scheme handler 用的 scheme，默认 <c>http</c>。obs-browser 已经把它
-    /// 注册成 standard + CORS enabled，所以能直接复用，不用自己建 CefApp。
+    /// 自定义 scheme handler 用的 scheme，默认 <c>https</c>。
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>https</c> 是 CEF / Chromium 的内置 scheme，可以给它注册 scheme handler
+    /// factory。原生库的 factory 总是返回 handler，请求被直接转给该 host 的命名管道 /
+    /// UDS，<b>不做 TLS</b>、不进网络栈，所以没有加解密开销。
+    /// </para>
+    /// <para>
+    /// 用 <c>https</c> 是为了让页面落在<b>安全上下文</b>里：<c>crypto.subtle</c>、
+    /// <c>serviceWorker</c>、<c>navigator.clipboard</c> 这些只在安全上下文开放的 API
+    /// 才能用。想退回明文来源（不安全上下文）可以显式传 <c>http</c>。
+    /// </para>
+    /// </remarks>
     public string? Scheme { get; init; }
 
     /// <summary>
