@@ -103,7 +103,7 @@ jobs:
             arch: x64
             outdir: x64
             native: OBSharp.Interop.Browser.Native.dll
-          - runs-on: windows-2025-vs2026
+          - runs-on: windows-11-vs2026-arm
             rid: win-arm64
             arch: arm64
             outdir: arm64
