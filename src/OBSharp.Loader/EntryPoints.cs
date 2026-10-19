@@ -187,17 +187,20 @@ public static unsafe class EntryPoints
         ((delegate* unmanaged<byte*, void>)s_obs_module_set_locale)(locale);
     }
 
+    // 返回 int 而不是 bool：UnmanagedCallersOnly 的方法签名必须是 blittable 的，bool 不是，
+    // ILC 会把这种方法的函数体整个换成 throw（构建时一条 ILC 警告），obs_module_load 一调就炸。
+    // C 那边的签名是 bool (*)(void)，读到的是 EAX / AL，返回 0 / 1 正好对得上。
     [UnmanagedCallersOnly(EntryPoint = "obs_module_load", CallConvs = new[] { typeof(CallConvCdecl) })]
-    public static bool Load()
+    public static int Load()
     {
         Logger.Debug("Invoke obs_module_load.");
         if (!InitializeCoreCLR())
-            return false;
+            return 0;
 
         if (s_obs_module_load is 0)
-            return false;
+            return 0;
 
-        return ((delegate* unmanaged<int>)s_obs_module_load)() is not 0;
+        return ((delegate* unmanaged<int>)s_obs_module_load)();
     }
 
     [UnmanagedCallersOnly(EntryPoint = "obs_module_post_load", CallConvs = new[] { typeof(CallConvCdecl) })]
