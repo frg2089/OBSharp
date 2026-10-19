@@ -32,6 +32,7 @@
 
 ```csharp
 using OBSharp;
+using OBSharp.Interop;
 
 namespace MyPlugin;
 
@@ -43,7 +44,8 @@ public sealed class MyPlugin : ObsPlugin
 
     public override bool Load()
     {
-        Logger.LogInformation("数据目录：{DataFolder}", DataFolder);
+        // 直接写进 OBS 的日志
+        ObsExtensions.Log(300, $"数据目录：{DataFolder}");
         return true;
     }
 
@@ -72,7 +74,6 @@ public sealed class MyPlugin : ObsPlugin
 | `Name` / `Description` | 插件名与描述，加载前就可用；宿主加载时读一次存下来，之后不再问插件 |
 | `Context` | `ObsPluginContext`，`Load()` 之后才可用 |
 | `DataFolder` | `<OB# 数据目录>/<插件名>`，附加之前已经创建好 |
-| `Logger` | 插件自己的日志，直接写进 OBS 的日志 |
 | `CreateBuilder()` | 配置插件自己的 Web 应用；跑起来会挂成 OBS 的停靠面板 |
 
 宿主固定跑在 ASP.NET Core 上（`Microsoft.NETCore.App` 和 `Microsoft.AspNetCore.App` 一起加载），插件要用
@@ -92,7 +93,7 @@ using var data = ObsDataExtensions.Create();
 data?.SetString("name", "value");
 string? json = data?.GetJson();
 
-// 直接写 OBS 日志（一般用 Logger 就够了）
+// 直接写 OBS 日志
 ObsExtensions.Log(300, "hello from plugin");
 ```
 
@@ -105,6 +106,14 @@ CEF 连上这个应用，Widget 交给 `obs_frontend_add_dock_by_id()`，面板�
 
 - 页面就是插件自己的 Kestrel 应用，`ContentRootPath` 是 `DataFolder`，`wwwroot` 在
   `<DataFolder>/wwwroot`。
+- 面板里的 HTTP 是从命名管道 / UDS 上代理过来的，一个连接一个请求（`Connection: close`），
+  过不了 WebSocket 升级：Blazor 用静态 SSR（表单回发），别用交互式渲染（SignalR 的
+  WebSocket 用不上，只能指望 SSE / 长轮询回退）。
+- 要在面板上跑 Blazor 这类带静态资源的应用，`MapStaticAssets()` 得显式喂清单的绝对路径：它默认
+  去 `AppContext.BaseDirectory`（那是宿主目录，不是插件目录）找 `{程序集名}.staticwebassets.endpoints.json`，
+  找不到会直接抛。资源本身按 `wwwroot` 解析，所以插件要按「发布」形态部署（`dotnet publish`），
+  让清单和 `wwwroot` 都待在插件目录里。`MapRazorComponents<App>()` 后面跟一句
+  `WithStaticAssets(同一个路径)`，`@Assets` / `ImportMap` 才拿得到带指纹的地址。
 - 进程里没有 obs-browser、CEF 起不来，插件照常跑，只是没有面板（日志里会记一条）。
 
 ## 数据目录与本地化
@@ -131,10 +140,13 @@ CEF 连上这个应用，Widget 交给 `obs_frontend_add_dock_by_id()`，面板�
    路径可以写相对的，按这个文件所在目录（也就是 OB# 数据目录）解析。
 3. 重启 OBS。
 
-`= false` 的行不会加载，但会留在插件列表里，可以在 OB# 的插件界面（`OBSharpPluginManager`）里启用。
+`= false` 的行不会加载，但会留在插件列表里，可以在插件管理器面板（`OBSharp.PluginManager` 这个插件）里启用。
 启用或停用之后 OB# 会把列表写回这个文件，所以手写的注释会被覆盖、相对路径会变成绝对路径。
 
-`OBSharp.SDK`、`OBSharp.Interop`、`OBSharp.Interop.Browser` 和 `Microsoft.Extensions.Logging.Abstractions` 由宿主提供：插件目录里就算有自己的一份副本也会被忽略（引用 SDK 时 `build/OBSharp.SDK.targets` 已经把它们从输出里去掉，编译时照样能引用）。跨边界的类型（`ObsPlugin`、`ILogger<T>`……）只有一份，插件才认得出来。插件加载在自己的 `AssemblyLoadContext` 里，可以卸载，卸载时宿主会把加载上下文也卸掉。
+`OBSharp.SDK`、`OBSharp.Interop`、`OBSharp.Interop.Browser` 和 `Microsoft.Extensions.Logging.Abstractions` 由宿主提供（宿主自己那份 `OBSharp.Runtime` 也一样）：插件目录里就算有自己的一份副本也会被忽略（引用 SDK 时 `build/OBSharp.SDK.targets` 已经把它们从输出里去掉，编译时照样能引用）。跨边界的类型（`ObsPlugin`、`ILogger<T>`……）只有一份，插件才认得出来。插件加载在自己的 `AssemblyLoadContext` 里，可以卸载，卸载时宿主会把加载上下文也卸掉。
+
+> 插件管理 API（`OBSharpPluginManager` 那一套）是 `OBSharp.Runtime` 的 `internal` 成员，只有插件管理器
+> （`OBSharp.PluginManager`，宿主的友元程序集）能用，普通插件拿不到。
 
 ## 目录
 

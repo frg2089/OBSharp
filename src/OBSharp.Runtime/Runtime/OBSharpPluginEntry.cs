@@ -2,9 +2,9 @@ namespace OBSharp.Runtime;
 
 /// <summary>
 /// 插件列表（<c>plugins.ini</c>）里的一项：程序集路径、状态和已经加载的实例。
-/// 由 <see cref="OBSharpPluginManager"/> 维护，外面只读。
+/// 由 <see cref="OBSharpPluginManager"/> 维护，外面（插件管理器）只读。
 /// </summary>
-public sealed class OBSharpPluginEntry
+internal sealed class OBSharpPluginEntry
 {
     public string Identifier { get; }
 

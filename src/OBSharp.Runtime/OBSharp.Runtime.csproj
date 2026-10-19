@@ -15,6 +15,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- 插件管理 API（OBSharpPluginManager 等）是 internal 的：只有插件管理器
+         （OBSharp.PluginManager）能拿到，普通插件拿不到。 -->
+    <InternalsVisibleTo Include="OBSharp.PluginManager" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\OBSharp.SDK\OBSharp.SDK.csproj" />
     <ProjectReference Include="..\OBSharp.Interop\OBSharp.Interop.csproj" />
   </ItemGroup>

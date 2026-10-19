@@ -27,8 +27,9 @@ public static partial class OBSModule
 
     /// <summary>
     /// 插件管理：枚举、启用、停用插件。<c>obs_module_set_pointer</c> 之后才可用。
+    /// 插件管理器（<c>OBSharp.PluginManager</c>）通过友元程序集拿到它，插件拿不到。
     /// </summary>
-    public static OBSharpPluginManager PluginManager => s_host.PluginManager;
+    internal static OBSharpPluginManager PluginManager => s_host.PluginManager;
 
     [UnmanagedCallersOnly]
     public static int Load() => s_host.Load() ? 1 : 0;

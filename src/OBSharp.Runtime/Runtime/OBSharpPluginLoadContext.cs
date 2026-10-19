@@ -9,7 +9,7 @@ namespace OBSharp.Runtime;
 /// Microsoft.Extensions.Logging.Abstractions ……）一律交给默认上下文加载：否则插件自己的副本
 /// 会带来第二份类型身份，<c>typeof(ObsPlugin).IsAssignableFrom</c> 直接失败，插件永远加载不上。
 /// </summary>
-public sealed class OBSharpPluginLoadContext(
+internal sealed class OBSharpPluginLoadContext(
     string pluginPath) : AssemblyLoadContext(Path.GetFileNameWithoutExtension(pluginPath), isCollectible: true)
 {
     // 宿主（OBSharp.Runtime）的依赖解析器，靠它旁边的 OBSharp.Runtime.deps.json。

@@ -3,7 +3,7 @@ namespace OBSharp.Runtime;
 /// <summary>
 /// 插件状态。
 /// </summary>
-public enum OBSharpPluginStatus
+internal enum OBSharpPluginStatus
 {
     /// <summary>
     /// 没有启用：插件列表里是 <c>false</c>，或者被运行时停用了。

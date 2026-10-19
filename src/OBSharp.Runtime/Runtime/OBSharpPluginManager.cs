@@ -6,9 +6,10 @@ namespace OBSharp.Runtime;
 
 /// <summary>
 /// 插件管理：读插件列表、按需加载和卸载插件、把启停状态写回列表文件。
-/// 宿主（<see cref="OBSharpHost"/>）用它转接 OBS 的生命周期回调，插件界面用它启停插件。
+/// 宿主（<see cref="OBSharpHost"/>）用它转接 OBS 的生命周期回调，插件管理器
+/// （<c>OBSharp.PluginManager</c>，本程序集的友元）用它启停插件。
 /// </summary>
-public sealed partial class OBSharpPluginManager
+internal sealed partial class OBSharpPluginManager
 {
     private const string ListFileName = "plugins.ini";
 

@@ -15,7 +15,7 @@ internal sealed partial class OBSharpHost(
     ILogger<OBSharpHost> logger)
 {
     /// <summary>
-    /// 插件管理，插件界面用它启停插件。
+    /// 插件管理，插件管理器（<c>OBSharp.PluginManager</c>）用它启停插件。
     /// </summary>
     public OBSharpPluginManager PluginManager => pluginManager;
 

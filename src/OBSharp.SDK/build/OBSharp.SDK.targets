@@ -23,6 +23,9 @@
     <OBSharpHostAssembly Include="OBSharp.Interop.Browser" />
     <OBSharpHostAssembly Include="Microsoft.Extensions.Logging.Abstractions" />
     <OBSharpHostAssembly Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <!-- 宿主自己那一份：插件管理器用友元程序集（InternalsVisibleTo）访问它的 internal 插件管理
+         API，编译时要引用，运行时用的还是宿主加载好的那一份，不能拷进插件目录。 -->
+    <OBSharpHostAssembly Include="OBSharp.Runtime" />
   </ItemGroup>
 
   <Target Name="OBSharpExcludeHostAssembliesFromOutput"
