@@ -315,8 +315,7 @@ jobs:
         shell: pwsh
         run: |-
           $source = Get-Item -Path "src/OBSharp.Runtime/Data"
-          $destination = Get-Item -Path "out/${{ matrix.data }}"
-          New-Item -ItemType Directory -Force -Path $destination | Out-Null
+          $destination = New-Item -ItemType Directory -Force -Path "out/${{ matrix.data }}"
           Copy-Item -Path $source -Destination $destination -Recurse -Force
 
       - name: 创建 macOS 插件包 Info.plist
