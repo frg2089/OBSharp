@@ -1,6 +1,6 @@
-using System.Collections.Concurrent;
-using System.Globalization;
-
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace OBSharp;
@@ -16,69 +16,59 @@ namespace OBSharp;
 /// </remarks>
 public sealed class ObsPluginContext
 {
-    private const string FallbackLocale = "en-US";
-
-    // 每种语言一份解析结果。OBS 换语言时会重新查（见 OBSharpHost.SetLocale），
-    // 所以这里按语言名缓存，插件可以在任意线程上调用 GetText。
-    private readonly ConcurrentDictionary<string, Dictionary<string, string>> _locales = new(StringComparer.OrdinalIgnoreCase);
-
-    internal ObsPluginContext(string dataFolder, ILogger logger)
+    internal ObsPluginContext(string name, string dataFolder)
     {
+        Name = name;
         DataFolder = dataFolder;
-        Logger = logger;
     }
+
+    /// <summary>
+    /// 插件标识符
+    /// </summary>
+    public string Name { get; }
 
     /// <summary>
     /// 插件的数据目录 <c>&lt;OB# 数据目录&gt;/&lt;插件名&gt;</c>，附加到插件之前已经创建好。
     /// </summary>
     public string DataFolder { get; }
 
-    /// <summary>
-    /// 插件自己的日志，写进 OBS 的日志（<c>blog</c>），类别名是插件的类型全名。
-    /// </summary>
-    public ILogger Logger { get; }
 
-    /// <summary>
-    /// 读取插件自己的本地化字符串：<c>&lt;DataFolder&gt;/locale/&lt;locale&gt;.ini</c>，
-    /// 先装 <c>en-US.ini</c> 再用当前语言覆盖（和 libobs 的 <c>obs_module_load_locale</c>
-    /// 一致）。找不到时按 OBS 的习惯返回 <paramref name="key"/> 本身。
-    /// </summary>
-    public string GetText(string key)
+    internal WebApplicationBuilder CreateBuilder()
     {
-        ArgumentException.ThrowIfNullOrEmpty(key);
-
-        string locale = CultureInfo.CurrentUICulture.Name;
-        return _locales.GetOrAdd(locale.Length is 0 ? FallbackLocale : locale, LoadLocale)
-            .TryGetValue(key, out string? text) ? text : key;
-    }
-
-    private Dictionary<string, string> LoadLocale(string locale)
-    {
-        Dictionary<string, string> text = new(StringComparer.Ordinal);
-        ReadLocaleFile(FallbackLocale, text);
-        if (!string.Equals(locale, FallbackLocale, StringComparison.OrdinalIgnoreCase))
-            ReadLocaleFile(locale, text);
-
-        return text;
-    }
-
-    private void ReadLocaleFile(string locale, Dictionary<string, string> text)
-    {
-        string path = Path.Combine(DataFolder, "locale", locale + ".ini");
-        if (!File.Exists(path))
-            return;
-
-        foreach (string line in File.ReadLines(path))
+        var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions()
         {
-            ReadOnlySpan<char> trimmed = line.AsSpan().Trim();
-            if (trimmed.IsEmpty || trimmed[0] is '#' or ';')
-                continue;
+            ApplicationName = Name,
+            ContentRootPath = DataFolder,
+            WebRootPath = Path.Combine(DataFolder, "wwwroot"),
+        });
 
-            int separator = trimmed.IndexOf('=');
-            if (separator <= 0)
-                continue;
+        string endpoint = GetEndpoint();
 
-            text[trimmed[..separator].TrimEnd().ToString()] = trimmed[(separator + 1)..].TrimStart().ToString();
-        }
+        builder.WebHost.ConfigureKestrel(options =>
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                options.ListenNamedPipe(Name);
+            }
+            else
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(endpoint)!);
+                options.ListenUnixSocket(endpoint);
+                File.SetUnixFileMode(endpoint, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+        });
+
+        // Web 应用起来之后，把这个插件挂成 OBS 的一个停靠面板（见 ObsPluginPanel）。
+        builder.Services.AddHostedService(services => new ObsPluginPanel(
+            Name,
+            endpoint,
+            services.GetRequiredService<ILoggerFactory>().CreateLogger<ObsPluginPanel>()));
+
+        return builder;
     }
+
+    // 插件 Web 应用的监听地址：Windows 是命名管道名，Unix 是 UDS 路径。
+    private string GetEndpoint() => OperatingSystem.IsWindows()
+        ? Name
+        : Path.Combine(Path.GetTempPath(), "obsharp", Name + ".socket");
 }

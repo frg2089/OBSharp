@@ -60,7 +60,7 @@ public sealed partial class OBSharpPluginManager
         lock (_gate)
         {
             return _entries.Find(entry =>
-                entry.Path.Equals(path, StringComparison.OrdinalIgnoreCase) ||
+                entry.AssemblyPath.Equals(path, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(entry.Name, pathOrName, StringComparison.OrdinalIgnoreCase));
         }
     }
@@ -76,7 +76,7 @@ public sealed partial class OBSharpPluginManager
         OBSharpPluginEntry entry = new(ResolvePath(path), enabled: false);
         lock (_gate)
         {
-            if (_entries.Find(item => item.Path.Equals(entry.Path, StringComparison.OrdinalIgnoreCase)) is { } exists)
+            if (_entries.Find(item => item.AssemblyPath.Equals(entry.AssemblyPath, StringComparison.OrdinalIgnoreCase)) is { } exists)
                 return exists;
 
             _entries.Add(entry);
@@ -117,7 +117,7 @@ public sealed partial class OBSharpPluginManager
         lock (_gate)
         {
             if (!_entries.Contains(entry))
-                throw new ArgumentException($"Plugin \"{entry.Path}\" is not in the plugin list.", nameof(entry));
+                throw new ArgumentException($"Plugin \"{entry.AssemblyPath}\" is not in the plugin list.", nameof(entry));
 
             if (entry.Status is OBSharpPluginStatus.Enabled)
                 return true;
@@ -144,7 +144,7 @@ public sealed partial class OBSharpPluginManager
         lock (_gate)
         {
             if (!_entries.Contains(entry))
-                throw new ArgumentException($"Plugin \"{entry.Path}\" is not in the plugin list.", nameof(entry));
+                throw new ArgumentException($"Plugin \"{entry.AssemblyPath}\" is not in the plugin list.", nameof(entry));
 
             if (entry.Status is OBSharpPluginStatus.Disabled)
                 return true;
@@ -201,17 +201,17 @@ public sealed partial class OBSharpPluginManager
         {
             if (LoadPlugin(entry))
             {
-                LogLoadedPlugin(entry.Path);
+                LogLoadedPlugin(entry.AssemblyPath);
                 return true;
             }
 
             // Load() 自己说失败，不是异常：记一条警告再回滚。
-            LogPluginLoadFailed(entry.Path);
+            LogPluginLoadFailed(entry.AssemblyPath);
             Rollback(entry, "Load() returned false.");
         }
         catch (Exception ex)
         {
-            LogLoadPluginFailed(ex, entry.Path);
+            LogLoadPluginFailed(ex, entry.AssemblyPath);
             Rollback(entry, ex.Message);
         }
 
@@ -221,13 +221,13 @@ public sealed partial class OBSharpPluginManager
     // 挂上加载上下文、构造插件、附加 Context，最后调插件的 Load。
     private bool LoadPlugin(OBSharpPluginEntry entry)
     {
-        if (!File.Exists(entry.Path))
-            throw new FileNotFoundException("Plugin assembly not found.", entry.Path);
+        if (!File.Exists(entry.AssemblyPath))
+            throw new FileNotFoundException("Plugin assembly not found.", entry.AssemblyPath);
 
         // 先把加载上下文挂到 entry 上：后面哪一步失败，Rollback 都能把它卸掉。
-        entry.SetLoadContext(new OBSharpPluginLoadContext(entry.Path));
+        entry.SetLoadContext(new OBSharpPluginLoadContext(entry.AssemblyPath));
 
-        Type type = FindPluginType(entry.LoadContext!, entry.Path);
+        Type type = FindPluginType(entry.LoadContext!, entry.AssemblyPath);
         if (Activator.CreateInstance(type) is not ObsPlugin plugin)
             throw new InvalidOperationException($"Cannot create plugin \"{type}\".");
 
@@ -236,9 +236,9 @@ public sealed partial class OBSharpPluginManager
         //（插件名是插件自己的属性，恶意插件可能每次取值都往里塞东西）。
         string name = plugin.Name;
         string? description = plugin.Description;
-        plugin.Attach(new ObsPluginContext(
-            GetDataFolder(name),
-            _loggerFactory.CreateLogger(type.FullName ?? type.Name)));
+        plugin.Attach(new(
+            name,
+            GetDataFolder(name)));
         entry.SetLoaded(plugin, name, description);
 
         return plugin.Load();
@@ -257,7 +257,7 @@ public sealed partial class OBSharpPluginManager
     {
         if (entry.Plugin is { } plugin)
         {
-            LogUnloadPlugin(entry.Path);
+            LogUnloadPlugin(entry.AssemblyPath);
             try
             {
                 plugin.Unload();
@@ -266,7 +266,7 @@ public sealed partial class OBSharpPluginManager
             }
             catch (Exception ex)
             {
-                LogUnloadPluginFailed(ex, entry.Path);
+                LogUnloadPluginFailed(ex, entry.AssemblyPath);
             }
         }
 
@@ -353,7 +353,7 @@ public sealed partial class OBSharpPluginManager
             }
 
             // 同一个路径只留一项。
-            if (_entries.Exists(entry => entry.Path.Equals(fullPath, StringComparison.OrdinalIgnoreCase)))
+            if (_entries.Exists(entry => entry.AssemblyPath.Equals(fullPath, StringComparison.OrdinalIgnoreCase)))
                 continue;
 
             // 只有 true 才启用，别的值（包括写错的）都只是列在表里，不会加载。
@@ -370,7 +370,7 @@ public sealed partial class OBSharpPluginManager
             [
                 ListHeader,
                 .. _entries.Select(entry =>
-                    $"{entry.Path} = {(entry.Status is OBSharpPluginStatus.Disabled ? "false" : "true")}")
+                    $"{entry.AssemblyPath} = {(entry.Status is OBSharpPluginStatus.Disabled ? "false" : "true")}")
             ];
             File.WriteAllLines(_listPath, lines, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
         }

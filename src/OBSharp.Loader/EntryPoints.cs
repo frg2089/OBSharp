@@ -2,9 +2,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Text.Json;
-
-using OBSharp.Loader.Models;
 
 using OBSharp.Interop;
 
@@ -17,8 +14,6 @@ public static unsafe class EntryPoints
     private const string AssemblyFileName = "OBSharp.Runtime.dll";
     private const string RuntimeConfigFileName = "OBSharp.Runtime.runtimeconfig.json";
     private const string TypeName = "OBSharp.OBSModule, OBSharp.Runtime";
-    private const string Tfm = "net10.0";
-    private const string FrameworkVersion = "10.0.0";
 
     private const int LIBOBS_API_MAJOR_VER = 32;
     private const int LIBOBS_API_MINOR_VER = 0;
@@ -38,8 +33,6 @@ public static unsafe class EntryPoints
     private static nint s_obs_module_unload;
     private static nint s_obs_module_free_locale;
 
-    private static Framework NETCore => new("Microsoft.NETCore.App", FrameworkVersion);
-    private static Framework AspNetCore => new("Microsoft.AspNetCore.App", FrameworkVersion);
 
     private static bool LoadMethod(string methodName, string? delegateTypeName, [NotNullWhen(true)] out nint @delegate, bool required)
     {
@@ -94,35 +87,11 @@ public static unsafe class EntryPoints
             string asm = Path.Combine(binAny, AssemblyFileName);
             Logger.Debug($"OBSharp Managed Path: {asm}");
 
-            // 宿主固定跑在 ASP.NET Core 上：两个框架都报给 hostfxr，插件直接就能用 ASP.NET Core 里的类型。
-            Logger.Info($"Using NETCore and AspNetCore frameworks.");
-            List<Framework> frameworks = new(2)
-            {
-                NETCore,
-                AspNetCore
-            };
-
-            string runtimeconfigTemplatePath = Path.Combine(dataPath, RuntimeConfigFileName);
-            RuntimeConfig? runtimeConfig = null;
-            if (File.Exists(runtimeconfigTemplatePath))
-            {
-                using var fs = File.OpenRead(runtimeconfigTemplatePath);
-                runtimeConfig = JsonSerializer.Deserialize(fs, SourceGenerationContext.Default.RuntimeConfig);
-            }
-
-            runtimeConfig ??= new();
-            runtimeConfig.RuntimeOptions.Tfm = Tfm;
-            // 固定两个框架：模板里要是写了单个 framework 就清掉，runtimeconfig.json 不许同时有这两个键。
-            runtimeConfig.RuntimeOptions.Framework = null;
-            runtimeConfig.RuntimeOptions.Frameworks = frameworks;
-
             string runtimeconfigPath = Path.Combine(binAny, RuntimeConfigFileName);
-            using (var fs = File.Create(runtimeconfigPath))
-                JsonSerializer.Serialize(fs, runtimeConfig, SourceGenerationContext.Default.RuntimeConfig);
+            Logger.Debug($"CoreCLR Runtime Config Path: {runtimeconfigPath}");
+
             try
             {
-                Logger.Debug($"CoreCLR Runtime Config Path: {runtimeconfigPath}");
-
                 string hostfxrPath = NetHost.GetHostFxrPath();
                 Logger.Info($"Found CoreCLR Host Framework at \"{hostfxrPath}\".");
 

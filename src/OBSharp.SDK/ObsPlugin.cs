@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using Microsoft.AspNetCore.Builder;
 
 namespace OBSharp;
 
@@ -10,6 +10,7 @@ namespace OBSharp;
 public abstract class ObsPlugin
 {
     private ObsPluginContext? _context;
+    private WebApplicationBuilder? _builder;
 
     /// <summary>
     /// 插件名。默认取插件程序集名（不含扩展名），同时用作数据目录名。
@@ -40,16 +41,6 @@ public abstract class ObsPlugin
     public string DataFolder => Context.DataFolder;
 
     /// <summary>
-    /// 插件自己的日志，等于 <see cref="ObsPluginContext.Logger"/>。
-    /// </summary>
-    public ILogger Logger => Context.Logger;
-
-    /// <summary>
-    /// 读取插件自己的本地化字符串，见 <see cref="ObsPluginContext.GetText"/>。
-    /// </summary>
-    public string GetText(string key) => Context.GetText(key);
-
-    /// <summary>
     /// 加载插件。返回 false 表示加载失败：宿主会记一条警告，然后回滚这个插件
     /// （调 <see cref="Unload"/>、释放加载上下文），所以这里没成功就别留下半截状态。
     /// </summary>
@@ -65,6 +56,17 @@ public abstract class ObsPlugin
     /// 卸载插件，释放插件自己持有的非托管资源。
     /// </summary>
     public virtual void Unload() { }
+
+    /// <summary>
+    /// 创建一个 <see cref="WebApplicationBuilder"/>，用于配置插件自己的 Web 应用。每个插件
+    /// 只能创建一个 Builder。
+    /// </summary>
+    /// <remarks>
+    /// 这个 Web 应用会被挂成 OBS 的一个停靠面板：应用跑起来（<c>Run</c> / <c>RunAsync</c>，
+    /// Kestrel 开始监听）之后，OB# 用浏览器连上它并调用 <c>obs_frontend_add_dock_by_id()</c>；
+    /// 应用停下时面板撤掉。进程里没有 obs-browser 时只是没有面板，应用本身照常。
+    /// </remarks>
+    protected WebApplicationBuilder CreateBuilder() => _builder ??= Context.CreateBuilder();
 
     // 只有宿主（OBSharp.Runtime）会调用它。
     internal void Attach(ObsPluginContext context)

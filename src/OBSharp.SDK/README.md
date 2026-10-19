@@ -73,7 +73,7 @@ public sealed class MyPlugin : ObsPlugin
 | `Context` | `ObsPluginContext`，`Load()` 之后才可用 |
 | `DataFolder` | `<OB# 数据目录>/<插件名>`，附加之前已经创建好 |
 | `Logger` | 插件自己的日志，直接写进 OBS 的日志 |
-| `GetText(key)` | 插件自己的本地化字符串 |
+| `CreateBuilder()` | 配置插件自己的 Web 应用；跑起来会挂成 OBS 的停靠面板 |
 
 宿主固定跑在 ASP.NET Core 上（`Microsoft.NETCore.App` 和 `Microsoft.AspNetCore.App` 一起加载），插件要用
 ASP.NET Core 里的类型，自己加 `<FrameworkReference Include="Microsoft.AspNetCore.App" />` 就能编译；那份程序集
@@ -96,15 +96,26 @@ string? json = data?.GetJson();
 ObsExtensions.Log(300, "hello from plugin");
 ```
 
+## 面板
+
+插件用 `CreateBuilder()` 配一个 ASP.NET Core 应用（监听在以插件名命名的命名管道 / UDS 上），
+把它跑起来（`Run` / `RunAsync`）之后，OB# 会把它挂成 OBS 的一个停靠面板：obsharp-browser 的
+CEF 连上这个应用，Widget 交给 `obs_frontend_add_dock_by_id()`，面板标题就是插件名；应用停下
+（插件被停用）时面板撤掉。
+
+- 页面就是插件自己的 Kestrel 应用，`ContentRootPath` 是 `DataFolder`，`wwwroot` 在
+  `<DataFolder>/wwwroot`。
+- 进程里没有 obs-browser、CEF 起不来，插件照常跑，只是没有面板（日志里会记一条）。
+
 ## 数据目录与本地化
 
-```text
-<OBS 数据目录>/obs-plugins/OBSharp/MyPlugin/
-    locale/en-US.ini     # Greeting=Hello
-    locale/zh-CN.ini     # Greeting=你好
-```
+插件的数据目录就是 `DataFolder`（`<OB# 数据目录>/<插件名>`），插件自己的配置、资源都放这里。
 
-`GetText("Greeting")` 先读 `en-US.ini`，再用当前语言的同名文件覆盖；两处都没有就返回 key 本身（和 OBS 的 `obs_module_text` 一个习惯）。当前语言来自 OBS 的 `obs_module_set_locale`，宿主会同步到 `CultureInfo.CurrentUICulture`。
+本地化直接用 .NET 自己的机制：字符串写成 `.resx` 资源（按 `Strings.zh-CN.resx` 这样的名字分语言），
+用 `ResourceManager`（或 ASP.NET Core 的 `IStringLocalizer`）取。宿主把 OBS 的当前语言同步到了
+`CultureInfo.CurrentUICulture`（由 `obs_module_set_locale` 触发，同时设了 `DefaultThreadCurrentUICulture`），
+所以按 culture 取资源会自动跟着 OBS 的语言走，插件不用自己读 ini、也不用管 OBS 的
+`obs_module_text`。
 
 ## 部署
 
@@ -130,5 +141,6 @@ ObsExtensions.Log(300, "hello from plugin");
 | 文件 | 内容 |
 | --- | --- |
 | `ObsPlugin.cs` | 插件基类 |
-| `ObsPluginContext.cs` | 宿主交给插件的环境信息、本地化字符串 |
+| `ObsPluginContext.cs` | 宿主交给插件的环境信息 |
+| `ObsPluginPanel.cs` | 把插件的 Web 应用挂成 OBS 停靠面板 |
 | `build/OBSharp.SDK.targets` | 插件工程 Import 它（引用包时自动导入）：把宿主提供的程序集从插件输出里去掉 |

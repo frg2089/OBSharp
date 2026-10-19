@@ -5,6 +5,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- 只有宿主能给插件附加 ObsPluginContext。 -->
     <InternalsVisibleTo Include="OBSharp.Runtime" />
   </ItemGroup>
