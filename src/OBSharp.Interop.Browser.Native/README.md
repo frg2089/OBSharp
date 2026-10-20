@@ -388,6 +388,14 @@ browser.PostMessage("""{"hello":"page"}""");
 * **Linux / macOS 还没在真机上编过**。Windows 那几条路都实际跑过（VS 2026、VS 2022，
   导出符号也对着公开头核过，都在本地做的）；Linux / macOS 目前只有平台适配代码，
   第一次真编是 GitHub CI 干的活，CI 红的话请看日志。
+* **Linux 产物没有 `DT_RPATH` / `DT_RUNPATH`**（`CMakeLists.txt` 里对 Unix 目标设了
+  `SKIP_BUILD_RPATH`）。CMake 本来会把 `CEF::Library` 的位置（CI 上是
+  `/home/runner/work/…/cef_binary_…/Release`）当成构建树 rpath 写进去，换台机器就没有意义。
+  运行时不靠它找 `libcef.so`：本库只会被 `dlopen` 进 OBS 进程，那时 obs-browser
+  已经把 `libcef.so` 按 SONAME 加载好了（发行版包的 `obs-browser.so` 自带
+  `RUNPATH /usr/lib64/cef/`），`dlopen` 会复用已加载的那份。副作用是**单独对产物跑
+  `ldd` 会报 `libcef.so => not found`**（`/usr/lib64/cef` 不在 `ld.so` 缓存里），
+  这是预期的，不代表 OBS 里加载不了。
 * **Windows arm64 要装 VS 的「C++ ARM64 生成工具」组件**，而且是「x64 主机编 arm64
   目标」：Qt6 会下两份（ARM64 那份 + x64 那份当 `QT_HOST_PATH`），CEF 下 arm64 那份，
   磁盘占用也跟着翻倍。没装那个组件时 configure 会过、编译才炸，看到 `cl.exe` 找不到

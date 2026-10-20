@@ -96,6 +96,26 @@ set_target_properties(
              RUNTIME_OUTPUT_DIRECTORY "${OBSHARP_NATIVE_OUTPUT_DIR}/${OBSHARP_NATIVE_ARCH}/$<CONFIG>"
              LIBRARY_OUTPUT_DIRECTORY "${OBSHARP_NATIVE_OUTPUT_DIR}/${OBSHARP_NATIVE_ARCH}/$<CONFIG>")
 
+if(UNIX AND NOT APPLE)
+  # Linux 上不要任何 DT_RPATH / DT_RUNPATH。
+  #
+  # CEF::Library 是 IMPORTED 目标，位置在 <CEF_ROOT_DIR>/Release/libcef.so，那不在系统
+  # 的隐式链接目录里，CMake 为了「构建树里的产物也能直接跑」会把这条路径写进 RUNPATH。
+  # 于是 CI 编出来的库带着 /home/runner/work/... 这种构建机路径，换台机器 ldd 就先去找
+  # 一个不存在的目录。
+  #
+  # 运行时不靠 runpath 指 CEF：本库只会被 dlopen 进 OBS 进程，那时候 obs-browser 早就
+  # 把 libcef.so 按 SONAME 加载好了（发行版包的 obs-browser 自己带 RUNPATH
+  # /usr/lib64/cef/），dlopen 本库时动态链接器会复用已加载的那份。INSTALL_RPATH 留空是
+  # 为了以后 cmake --install 别再塞回来。只关 rpath 生成，SONAME / NEEDED / 导出符号
+  # 都不受影响。
+  set_target_properties(
+    OBSharp.Interop.Browser.Native
+    PROPERTIES SKIP_BUILD_RPATH TRUE
+               BUILD_WITH_INSTALL_RPATH FALSE
+               INSTALL_RPATH "")
+endif()
+
 if(MSVC)
   # 源码是 UTF-8（无 BOM），注释里有中文，不告诉 MSVC 就会按本地代码页解释。
   target_compile_options(OBSharp.Interop.Browser.Native PRIVATE /utf-8)
