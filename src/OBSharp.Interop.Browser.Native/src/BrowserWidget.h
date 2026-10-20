@@ -95,6 +95,8 @@ private:
 
 	QCefWidgetApi *cef_ = nullptr;
 	QWidget *widget_ = nullptr;
+	// 吃掉 QEvent::Close 的过滤器（见 BrowserWidget.cpp）。
+	QObject *closeGuard_ = nullptr;
 	std::unique_ptr<BrowserEventSink> sink_;
 	std::string currentUrl_; // 当前（映射后的）文档地址
 	std::string host_;

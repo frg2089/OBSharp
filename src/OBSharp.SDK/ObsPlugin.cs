@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Builder;
 
 namespace OBSharp;
 
@@ -57,7 +57,7 @@ public abstract class ObsPlugin
     /// </summary>
     /// <remarks>
     /// 插件自己通过 <see cref="ObsPluginContext.RegisterHost"/> 注册的 host、通过
-    /// <c>AddDockWindow</c> / <c>AddToolWindow</c> 开的窗口，由宿主在 <see cref="Unload"/>
+    /// <see cref="ObsBrowser"/> / <see cref="ObsWindow"/> 之类的对象，由宿主在 <see cref="Unload"/>
     /// 之后统一收尾（见 <see cref="CloseContext"/>），插件不用手动停它们；这里只管插件
     /// 自己另外持有的东西。
     /// </remarks>

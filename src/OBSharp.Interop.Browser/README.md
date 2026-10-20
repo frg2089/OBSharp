@@ -16,19 +16,17 @@ OBS 自己那份。另起一个进程引用它，`OBSharpNative.Initialize` 只�
 | --- | --- |
 | `OBSharpNative` | 库级入口：`AbiVersion` / `Initialize` / `IsAvailable` / `Version` / `LastError` / `IsUiThread` / `InvokeUi` / `ProbeEndpoint` |
 | `CefBrowser` | 一个浏览器实例（`IDisposable`）：`Widget` / `Load` / `Reload` / `Zoom` / `ExecuteScript` / `PostMessage` / `Resize` / `Move` / `SetVisible` 等 |
-| `CefDockWindow` | 一个 OBS 停靠窗口（`IDisposable`）：`Create` / `Id` / `Widget` / `Browser` / `Title` / `IsVisible` / `Show` / `Hide` / `SetSize` / `Dispose` |
-| `CefToolWindow` | 一个独立顶层窗口（`IDisposable`）：`Create` / `Browser` / `Title` / `Size` / `IsVisible` / `Show` / `Hide` / `SetSize` / `CloseRequested` / `Dispose` |
+| `CefWindow` | 一个普通顶层窗口容器（`IDisposable`，**不含浏览器**）：`Create` / `Content` / `Widget` / `Title` / `Size` / `IsVisible` / `Show` / `Hide` / `SetSize` / `CloseRequested` / `Dispose` |
 | `BrowserOptions` | 建浏览器时的参数：`Url` / `Host` / `Scheme` / `Domain` / `Endpoint` / `EndpointKind` / `StartupScript` / `Transparent` / `BackgroundColor` / `ParentWidget` / `Callbacks` |
-| `DockWindowOptions` | 建停靠窗口时的参数：`Id` / `Title` / `Visible` / `Width` / `Height` / `Callbacks` / `Browser` |
-| `ToolWindowOptions` | 建工具窗口时的参数：`Title` / `Width` / `Height` / `Visible` / `Topmost` / `Resizable` / `Callbacks` / `Browser` |
+| `WindowOptions` | 建窗口时的参数：`Title` / `Width` / `Height` / `Visible` / `Topmost` / `Resizable` / `Callbacks` |
+| `WindowOptions` | 建窗口时的参数：`Title` / `Width` / `Height` / `Visible` / `Topmost` / `Resizable` / `Callbacks` |
 | `BrowserCallbacks` | 浏览器回调：`TitleChanged` / `UrlChanged` / `LoadEnd` / `ConsoleMessage` / `Message` |
 | `WindowCallbacks` | 窗口回调：`CloseRequested` |
 | `OBSharpResult` / `OBSharpNativeException` | 返回码，以及失败时抛的异常 |
 | `OBSharpConsoleLevel` / `OBSharpEndpointKind` | 上面两个用到的枚举 |
 
 `NativeMethods`、`NativeLibraryLoader`、`CallbackSink`、`WindowCallbackSink`、
-`NativeOptionsBuffer`、`OBSharpBrowserOptions`、`OBSharpDockWindowOptions`、
-`OBSharpToolWindowOptions`、`OBSharpWindowCallbacks` 这些是内部实现，不对外。
+`OBSharpWindowCallbacks` 这些是内部实现，不对外。
 
 ## 引用
 
@@ -84,91 +82,64 @@ using OBSharp.Interop.Browser;
 // 1. 解析 obs-browser、开始等 CEF 就绪；幂等，可以在任意线程调。
 OBSharpNative.Initialize("MyPlugin");
 
-// 2. 等 OBSharpNative.IsAvailable 变成 true（CEF 起来得花点时间）再建浏览器。
+// 两块东西是分开的：浏览器（页面）和窗口（容器）。
+// 建浏览器会等 CEF 就绪（可能阻塞几秒），建议在后台线程调。
 using var browser = CefBrowser.Create(new BrowserOptions
 {
-    Endpoint = "obsharp-myplugin",  // Kestrel 监听的命名管道名 / UDS 路径
-    Url = "https://obsharp/",       // 省略时按 <scheme>://<domain>/（默认 https）
+    Host = "myplugin",           // → obsharp://myplugin/，端点自动推导
     Callbacks = new BrowserCallbacks
     {
         Message = json => Console.WriteLine($"page: {json}"),
     },
 });
 
-// 3. Widget 就是个 QWidget*：交给 obs_frontend_add_dock_by_id()，或者自己 setParent。
-//    不要自己 delete，CefBrowser.Dispose() 会一起销毁。
-nint widget = browser.Widget;
+// 用法 A：交给 OBS 当停靠面板。
+// OBS 会自己建 QDockWidget、挂进主窗口，**并且自动加「停靠窗口」菜单项**
+//（add_dock_by_id 内部走 AddDockWidget，那条路径会 insert toggleViewAction）。
+OBSharpNative.InvokeUi(() => ObsFrontend.AddDockById("myplugin-panel", "My Plugin", browser.Widget));
+
+// 撤掉时用 RemoveDock：Widget 已经交给 OBS，不能再 Dispose 浏览器本身。
+OBSharpNative.InvokeUi(() => ObsFrontend.RemoveDock("myplugin-panel"));
 ```
 
-### host + 停靠窗口
+### 普通窗口
+
+`CefWindow` 是一个**纯容器**：原生侧是 `Qt::Window`（普通标题栏、能最小化 / 最大化、
+进任务栏、可以单独 Alt+Tab），**不含浏览器**。它**不是** Qt / Windows 意义上的
+tool window（那对应 `Qt::Window | Qt::Tool` / `WS_EX_TOOLWINDOW`）。
 
 ```csharp
-using OBSharp.Interop;         // ObsFrontend.AddCustomQdock / RemoveDock 在这儿
 using OBSharp.Interop.Browser;
 
-OBSharpNative.Initialize("MyPlugin");
-
-// 建停靠窗口：原生侧建 QDockWidget（内含浏览器），这里还没挂进 OBS。
-// Create 会等 CEF 就绪（可能阻塞几秒），建议在后台线程调。
-using var dock = CefDockWindow.Create(new DockWindowOptions
+using var page = CefBrowser.Create(new BrowserOptions
 {
-    Id = "myplugin-panel",       // OBS 停靠面板 id；省略时用 host 名
-    Title = "My Plugin",         // 省略时用 host 名 / URL host
-    Width = 640,
-    Height = 480,
-    Browser = new BrowserOptions
-    {
-        Host = "myplugin",       // → obsharp://myplugin/，端点自动推导
-        Callbacks = new BrowserCallbacks
-        {
-            Message = json => Console.WriteLine($"page: {json}"),
-        },
-    },
+    Host = "myplugin",
+    Url = "obsharp://myplugin/inspector",
 });
 
-// 挂进 OBS 必须在 Qt 主线程上。Widget 是 QDockWidget*（借用）。
-OBSharpNative.InvokeUi(() => ObsFrontend.AddCustomQdock("myplugin-panel", dock.Widget));
-
-// 之后可以直接操作，托管层会自己切主线程。
-dock.Show();                 // 第一次显示才真正加载页面
-dock.Title = "My Plugin 2";
-
-// 销毁前必须先从 OBS 摘掉（obs_frontend_remove_dock），否则 OBS 还引用着它。
-// 注意：CefDockWindow 故意没有终结器 —— 忘记 Dispose 只会泄漏原生对象，
-// 不会在 OBS 还引用 QDockWidget 时把它删掉。
-OBSharpNative.InvokeUi(() => ObsFrontend.RemoveDock("myplugin-panel"));
-dock.Dispose();
-```
-
-### 工具窗口
-
-```csharp
-using OBSharp.Interop.Browser;
-
-using var tool = CefToolWindow.Create(new ToolWindowOptions
+using var window = CefWindow.Create(new WindowOptions
 {
     Title = "Inspector",
     Width = 720,
     Height = 480,
-    Visible = true,              // 创建后立刻显示
     Topmost = true,              // 置顶
-    Browser = new BrowserOptions { Host = "myplugin", Url = "obsharp://myplugin/inspector" },
 });
 
+window.Content = page.Widget;    // 把浏览器放进去，铺满
+window.Show();
+
 // 用户点关闭：窗口只是隐藏，不销毁；事件在 Qt 主线程上触发。
-tool.CloseRequested += (_, _) => Console.WriteLine("用户关掉了窗口");
+window.CloseRequested += (_, _) => Console.WriteLine("用户关掉了窗口");
+window.Size = (900, 600);
+window.Title = "Inspector 2";
 
-tool.Show();
-tool.Size = (900, 600);          // 等价于 tool.SetSize(900, 600)
-tool.Title = "Inspector 2";
-
-// 借用包装：对它 Dispose 不会销毁原生浏览器（归窗口所有）。
-CefBrowser? page = tool.Browser;
-page?.PostMessage("""{"type":"ping"}""");
+page.PostMessage("""{"type":"ping"}""");
 ```
 
+窗口**不拥有**内容：销毁窗口不会销毁浏览器，两者各自 `Dispose`
+（先窗口后浏览器更稳妥，因为内容的父级是窗口）。
 不在 OBS 的 Qt 主线程上调用时，托管层会用 `OBSharpNative.InvokeUi` 自动切过去；
-`CefBrowser` / `CefDockWindow` / `CefToolWindow` 的成员都能直接调，不用自己判线程。只有
+`CefBrowser` / `CefWindow` 的成员都能直接调，不用自己判线程。只有
 `Create` 可能长时间阻塞（等 CEF 就绪），建议放到后台线程，并 catch
 `OBSharpNativeException`（进程里没有 obs-browser 时会抛，`Result` 是
 `BrowserUnavailable` / `NotInitialized`）。

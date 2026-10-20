@@ -6,6 +6,9 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
+using OBSharp.Interop;
+using OBSharp.Interop.Browser;
+
 namespace OBSharp;
 
 /// <summary>
@@ -90,6 +93,16 @@ public sealed partial class ObsHost : IAsyncDisposable
     /// 已经启动、并且还没有 <see cref="StopAsync"/> 时是 <see langword="true"/>。
     /// </summary>
     public bool IsRunning => _running;
+
+    /// <summary>
+    /// 已经 <see cref="DisposeAsync"/> 时是 <see langword="true"/>。
+    /// </summary>
+    public bool IsDisposed => _disposed;
+
+    /// <summary>
+    /// 插件名（用于日志前缀，跟 <see cref="ObsPlugin.Name"/> 一致）。
+    /// </summary>
+    internal string PluginName => _pluginName;
 
     /// <summary>
     /// 配置这台 Kestrel 用的 <see cref="WebApplicationBuilder"/>。
@@ -277,6 +290,9 @@ public sealed partial class ObsHost : IAsyncDisposable
     /// 校验 host 名。不合法的名字会直接当管道名 / 文件名用，必须先挡住。
     /// </summary>
     /// <exception cref="ArgumentException">名字为空或不合法。</exception>
+    internal static bool IsValidName(string? name)
+        => !string.IsNullOrEmpty(name) && HostNamePattern().IsMatch(name);
+
     internal static void ValidateName(string name)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
@@ -338,4 +354,148 @@ public sealed partial class ObsHost : IAsyncDisposable
             Debug.WriteLine($"Could not set the permissions of OB# host socket \"{Endpoint}\": {ex}");
         }
     }
+
+    // ---- OBS 集成 ----------------------------------------------------------
+    //
+    // 这两组方法就是 SDK 对 OBS 前端的全部暴露面。刻意做得薄：SDK 不发明窗口体系，
+    // 只把「浏览器（ObsBrowser）」和「放到哪儿」两件事分开。
+
+    // 本 host 挂上去的停靠面板 id。host 销毁时统一撤掉，免得留下指向已卸载插件的面板。
+    private readonly HashSet<string> _dockPanels = [];
+    private readonly Lock _dockGate = new();
+
+    private void TrackDockPanel(string id)
+    {
+        lock (_dockGate)
+            _dockPanels.Add(id);
+    }
+
+    private void UntrackDockPanel(string id)
+    {
+        lock (_dockGate)
+            _dockPanels.Remove(id);
+    }
+
+    /// <summary>
+    /// 建一块浏览器并挂成 OBS 的停靠面板，<b>不阻塞调用方</b>。
+    /// </summary>
+    /// <param name="id">面板 id（<c>QDockWidget</c> 的 objectName），全局唯一。</param>
+    /// <param name="title">「停靠窗口」菜单里显示的文字，同时也是面板标题。</param>
+    /// <param name="url">初始地址；为 <see langword="null"/> 时用 host 的地址。</param>
+    /// <returns>挂上返回浏览器对象；失败（CEF 不可用 / id 被占 / 不在 OBS 里）返回 null。</returns>
+    /// <remarks>
+    /// <para>
+    /// 建浏览器要等 CEF 冷启动（几秒），而 <see cref="ObsPlugin.Load"/> 跑在 OBS 的 Qt
+    /// 主线程上，同步等会卡住整个界面。所以这里把「等 CEF」挪到线程池上，
+    /// 插件侧只管 <c>await</c> 或者干脆不等。
+    /// </para>
+    /// <para>
+    /// 返回值在挂上之后才有意义：不关心结果的话直接
+    /// <c>_ = host.AddDockPanelAsync(...)</c> 就行；要记着这块浏览器（比如卸载时要
+    /// 区分它和窗口那块）就 await 它。
+    /// </para>
+    /// </remarks>
+    public async Task<ObsBrowser?> AddDockPanelAsync(string id, string title, string? url = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        ArgumentException.ThrowIfNullOrWhiteSpace(title);
+
+        // ConfigureAwait(false)：建浏览器是纯原生调用，不需要回原来的调度器。
+        // 这一句就是「不要在 Qt 主线程上等」的全部实现，插件侧不用再写 Task.Run。
+        ObsBrowser browser = await Task.Run(() => ObsBrowser.Create(this, url)).ConfigureAwait(false);
+
+        if (!AddDockPanel(id, title, browser))
+        {
+            browser.Dispose();
+            return null;
+        }
+
+        return browser;
+    }
+
+    /// <summary>
+    /// 把一块浏览器的 Widget 挂成 OBS 的停靠面板。
+    /// </summary>    /// <param name="id">面板 id（<c>QDockWidget</c> 的 objectName），全局唯一。</param>
+    /// <param name="title">「停靠窗口」菜单里显示的文字，同时也是面板标题。</param>
+    /// <param name="browser">要显示的浏览器。</param>
+    /// <returns>挂上了返回 <see langword="true"/>；id 被占用或不在 OBS 里返回 <see langword="false"/>。</returns>
+    /// <remarks>
+    /// <para>
+    /// 底层调 <c>obs_frontend_add_dock_by_id()</c>。这个 API 内部走 OBS 自己的
+    /// <c>AddDockWidget</c>，所以它会**自动**把面板加进「停靠窗口」菜单 ——
+    /// 不需要额外做什么（不像 <c>obs_frontend_add_custom_qdock</c> 只挂 dock 不加菜单）。
+    /// </para>
+    /// <para>
+    /// 挂上之后 Widget 归 OBS 所有，<b>不要</b>再 <see cref="ObsBrowser.Dispose"/>：
+    /// 撤掉面板请用 <see cref="RemoveDockPanel"/>。
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="browser"/> 是 null。</exception>
+    public bool AddDockPanel(string id, string title, ObsBrowser browser)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        ArgumentException.ThrowIfNullOrWhiteSpace(title);
+        ArgumentNullException.ThrowIfNull(browser);
+
+        if (browser.Widget == 0)
+            return false;
+
+        bool added = false;
+        OBSharpNative.InvokeUi(
+            () => added = ObsFrontend.AddDockById(id, title, browser.Widget));
+
+        if (added)
+            TrackDockPanel(id);
+
+        return added;
+    }
+
+    /// <summary>
+    /// 撤掉 <see cref="AddDockPanel"/> 挂上去的面板。
+    /// </summary>
+    /// <remarks>
+    /// 面板里的浏览器 Widget 归 OBS，撤掉之后由 OBS 销毁；调用方不要再碰那个
+    /// <see cref="ObsBrowser"/>（也不要 <see cref="ObsBrowser.Dispose"/>）。
+    /// </remarks>
+    public void RemoveDockPanel(string id)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+
+        OBSharpNative.InvokeUi(() => ObsFrontend.RemoveDock(id));
+        UntrackDockPanel(id);
+    }
+
+    /// <summary>
+    /// 起 Kestrel 并在「工具」菜单里加一项；点它执行 <paramref name="onClick"/>。
+    /// </summary>
+    /// <param name="text">菜单项文字。</param>
+    /// <param name="onClick">点击回调，在 Qt 主线程上执行。</param>
+    /// <returns>加上了返回 <see langword="true"/>。</returns>
+    /// <remarks>
+    /// <para>
+    /// 注意：OBS <b>没有</b>「移除工具菜单项」的 API，加进去的那一项会一直在。所以
+    /// 回调必须能在插件卸载后安全地什么都不做 —— 用 <see cref="ObsPluginContext"/> 的
+    /// 存活状态判断，或者把窗口引用置空。
+    /// </para>
+    /// <para>
+    /// 只加菜单项、不建窗口：窗口应该在回调里懒创建（点一次才建，关掉就销毁），
+    /// 否则插件一加载就白白吃掉一个 CEF 实例。
+    /// </para>
+    /// </remarks>
+    public bool AddToolsMenuItem(string text, Action onClick)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(text);
+        ArgumentNullException.ThrowIfNull(onClick);
+
+        return ToolsMenu.Add(this, text, onClick);
+    }
+
+    /// <summary>
+    /// 断开本 host 加过的全部「工具」菜单项回调。
+    /// </summary>
+    /// <remarks>
+    /// OBS 没有「移除菜单项」的 API，那些项仍留在菜单里；断开之后点了什么都不做。
+    /// <see cref="DisposeAsync"/> 会自动做这一步，一般不用手动调。
+    /// </remarks>
+    public void ClearToolsMenuItems() => ToolsMenu.RemoveAllFor(this);
 }

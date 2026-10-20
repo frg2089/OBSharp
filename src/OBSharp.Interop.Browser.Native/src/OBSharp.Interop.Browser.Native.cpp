@@ -24,6 +24,8 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <thread>
 
@@ -42,7 +44,7 @@ struct obsharp_browser {
 
 namespace {
 
-constexpr const char *kVersionString = "0.2.0";
+constexpr const char *kVersionString = "0.3.0";
 
 // 等 obs-browser 把 CEF 初始化完的上限。CEF 冷启动一般 1~3 秒。
 constexpr int kCefReadyTimeoutMs = 15000;
@@ -68,7 +70,17 @@ bool g_initialized = false;
 bool g_initFailed = false;
 std::string g_initError;
 QThread *g_uiThread = nullptr;
-obsharp_browser *g_activeBrowser = nullptr; // 页面消息往哪儿派发
+
+// 当前活着的浏览器。用来判断「投递到 Qt 线程的消息对应的浏览器还在不在」——
+// 浏览器可能在消息投递之后、真正派发之前被销毁。
+//
+// 不能用单个「当前浏览器」指针：进程里可能同时有好几个（停靠面板 + 工具窗口），
+// 后建的会覆盖先建的，消息就派发错对象了。
+std::unordered_set<obsharp_browser *> g_liveBrowsers;
+
+// domain（CEF 里的 "<host>.obsharp"）-> 浏览器。scheme handler 只知道自己注册在
+// 哪个 domain 上，靠这张表把页面消息路由回对应的浏览器。
+std::unordered_map<std::string, obsharp_browser *> g_browsersByDomain;
 
 void OBSHARP_BROWSER_NATIVE_CALL DestroyBrowserThunk(void *user);
 
@@ -155,13 +167,11 @@ bool RunOnCefUiThread(const std::function<void()> &fn) {
 
 // 引导脚本的约定：带 "$obsharp" 键的 JSON 是控制消息（加载结束 / console），
 // 其余原样交给 on_message。只能在 Qt 主线程上调用。
-void DispatchBridgeJson(const std::string &json) {
-	obsharp_browser *browser = nullptr;
-	{
-		std::lock_guard<std::mutex> lock(g_mutex);
-		browser = g_activeBrowser;
-	}
-
+//
+// |browser| 是<b>发起这条消息的那个浏览器</b>，由 scheme handler / widget 传进来。
+// 不能用「全局当前浏览器」：进程里可能同时活着好几个（停靠面板一个、工具窗口一个），
+// 消息必须回到它自己的那个回调上，否则 A 窗口的 console 消息会跑去 B 窗口。
+void DispatchBridgeJson(obsharp_browser *browser, const std::string &json) {
 	if (!browser)
 		return;
 
@@ -198,9 +208,43 @@ void DispatchBridgeJson(const std::string &json) {
 }
 
 // SchemeHandler 的回调跑在 CEF 的 UI 线程上，先切回 Qt 主线程再派发。
-void OnBridgeMessage(const std::string &json) {
+//
+// 带上发起消息的 browser：同一进程里可能有好几个浏览器（停靠面板 + 工具窗口），
+// 消息必须回到各自的那个回调上。
+void OnBridgeMessage(obsharp_browser *browser, const std::string &json) {
+	if (!browser)
+		return;
+
 	std::string copy = json;
-	PostToQtThread([copy]() { DispatchBridgeJson(copy); });
+	PostToQtThread([browser, copy]() {
+		// 浏览器可能在投递之后、派发之前被销毁了：g_liveBrowsers 里能查到才派发。
+		{
+			std::lock_guard<std::mutex> lock(g_mutex);
+			if (g_liveBrowsers.find(browser) == g_liveBrowsers.end())
+				return;
+		}
+
+		DispatchBridgeJson(browser, copy);
+	});
+}
+
+// scheme handler 是按 (scheme, domain) 注册的，拿不到「哪个浏览器」，只有 domain。
+// 这里按 domain 找到对应的浏览器再派发。
+//
+// 同一个 domain 理论上可以有多个浏览器（比如面板和窗口都指向同一个 host）——
+// 那种情况下消息只发给「最近注册的那一个」，够用（bridge 消息是页面自己上报的
+// console / load-end，本来就是各窗口独立上报，而 domain 相同意味着页面也相同）。
+void RouteBridgeMessage(const std::string &domain, const std::string &json) {
+	obsharp_browser *browser = nullptr;
+	{
+		std::lock_guard<std::mutex> lock(g_mutex);
+		auto it = g_browsersByDomain.find(domain);
+		if (it != g_browsersByDomain.end())
+			browser = it->second;
+	}
+
+	if (browser)
+		OnBridgeMessage(browser, json);
 }
 
 // ---------------------------------------------------------------------------
@@ -235,7 +279,10 @@ bool WaitForCefReady(const obsharp::BrowserPanel &panel) {
 
 // 注册 scheme handler。CEF 里每个 (scheme, host) 键只能有一个 factory，所以
 // 是否已注册由 obsharp::InstallSchemeHandler() 自己记账（同键复用、端点不一致
-// 记警告）；这里只负责切到 CEF UI 线程并区分「切不过去」和「注册失败」。
+// 记警告）；这里只负责切到 CEF  UI 线程并区分「切不过去」和「注册失败」。
+//
+// 消息路由：factory 是按 (scheme, domain) 全局唯一的，拿不到「这是哪个浏览器发的」。
+// 所以这里传一个按 domain 查浏览器的路由函数（见 RouteBridgeMessage）。
 bool InstallSchemeHandlerOnce(const std::string &scheme, const std::string &domain,
 			      const obsharp::Endpoint &endpoint) {
 	const std::string key = scheme + "://" + domain;
@@ -243,7 +290,9 @@ bool InstallSchemeHandlerOnce(const std::string &scheme, const std::string &doma
 	std::string error;
 	bool installed = false;
 	const bool ran = RunOnCefUiThread([&]() {
-		installed = obsharp::InstallSchemeHandler(scheme, domain, endpoint, &OnBridgeMessage, error);
+		installed = obsharp::InstallSchemeHandler(
+			scheme, domain, endpoint,
+			[domain](const std::string &json) { RouteBridgeMessage(domain, json); }, error);
 	});
 
 	if (!ran) {
@@ -283,6 +332,33 @@ const char *OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_native_version(void) {
 int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_native_initialize(const char *log_tag) {
 	if (log_tag && *log_tag)
 		obsharp::SetLogTag(log_tag);
+
+	// 打一行版本 + 本 DLL 的实际路径。
+	//
+	// 排查「改了原生库却没生效」时这是第一条要看的：OB# 的部署目录里
+	// （bin/64bit 和 bin/any）可能同时存在这份 DLL，加载的如果不是刚编出来那份，
+	// 代码怎么改都不会有效果。版本号也对得上头文件里的 ABI 才算真的更新了。
+	{
+		std::string where;
+#ifdef _WIN32
+		if (HMODULE self = nullptr;
+		    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+					       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+				       reinterpret_cast<LPCWSTR>(&obsharp_browser_native_initialize), &self)) {
+			wchar_t buffer[MAX_PATH]{};
+			if (GetModuleFileNameW(self, buffer, MAX_PATH) > 0) {
+				const int needed = WideCharToMultiByte(CP_UTF8, 0, buffer, -1, nullptr, 0, nullptr, nullptr);
+				if (needed > 0) {
+					where.resize(static_cast<size_t>(needed - 1));
+					WideCharToMultiByte(CP_UTF8, 0, buffer, -1, where.data(), needed, nullptr, nullptr);
+				}
+			}
+		}
+#endif
+		obsharp::LogInfo(std::string("native library v") + kVersionString + " (ABI " +
+				 std::to_string(OBSHARP_BROWSER_NATIVE_ABI_VERSION) + ")" +
+				 (where.empty() ? std::string() : " loaded from " + where));
+	}
 
 	obsharp::QCef *panelCef = nullptr;
 	int panelVersion = 0;
@@ -472,12 +548,17 @@ obsharp_browser *OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_create(const obshar
 		return nullptr;
 	}
 
-	widget->SetMessageHandler(&OnBridgeMessage);
 	browser->widget = std::move(widget);
+
+	// 消息处理器要带上 browser 自己：见 OnBridgeMessage 的说明。
+	obsharp_browser *raw = browser.get();
+	raw->widget->SetMessageHandler([raw](const std::string &json) { OnBridgeMessage(raw, json); });
 
 	{
 		std::lock_guard<std::mutex> lock(g_mutex);
-		g_activeBrowser = browser.get();
+		g_liveBrowsers.insert(raw);
+		if (!hostConfig.domain.empty())
+			g_browsersByDomain[hostConfig.domain] = raw;
 	}
 
 	return browser.release();
@@ -496,9 +577,16 @@ void OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_destroy(obsharp_browser *browse
 	}
 
 	{
+		// 先从存活集合里摘掉：之后再到来的消息就不会派发到这个已销毁的对象上。
 		std::lock_guard<std::mutex> lock(g_mutex);
-		if (g_activeBrowser == browser)
-			g_activeBrowser = nullptr;
+		g_liveBrowsers.erase(browser);
+
+		for (auto it = g_browsersByDomain.begin(); it != g_browsersByDomain.end();) {
+			if (it->second == browser)
+				it = g_browsersByDomain.erase(it);
+			else
+				++it;
+		}
 	}
 
 	delete browser;

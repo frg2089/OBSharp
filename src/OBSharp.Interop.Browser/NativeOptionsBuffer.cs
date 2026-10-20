@@ -4,12 +4,11 @@ namespace OBSharp.Interop.Browser;
 
 /// <summary>
 /// 把托管选项里的字符串编成原生结构体需要的 UTF-8 非托管缓冲区：
-/// <see cref="OBSharpBrowserOptions"/>、<see cref="OBSharpDockWindowOptions"/>、
-/// <see cref="OBSharpToolWindowOptions"/>。
+/// <see cref="OBSharpBrowserOptions"/>、<see cref="OBSharpWindowOptions"/>。
 /// </summary>
 /// <remarks>
 /// <para>
-/// 原生 <c>obsharp_browser_create</c> / <c>obsharp_*_window_create</c> 返回前就会把
+/// 原生 <c>obsharp_browser_create</c> / <c>obsharp_window_create</c> 返回前就会把
 /// 字符串拷进自己的 <c>std::string</c>，所以 <see cref="Dispose"/> 可以在调用返回后
 /// 立刻执行。
 /// </para>
@@ -28,14 +27,9 @@ internal sealed unsafe class NativeOptionsBuffer : IDisposable
     public OBSharpBrowserOptions Browser;
 
     /// <summary>
-    /// <c>obsharp_dock_window_options</c> 缓冲区；<see cref="CreateDock"/> 用。
+    /// <c>obsharp_window_options</c> 缓冲区；<see cref="CreateWindow"/> 用。
     /// </summary>
-    public OBSharpDockWindowOptions DockOptions;
-
-    /// <summary>
-    /// <c>obsharp_tool_window_options</c> 缓冲区；<see cref="CreateTool"/> 用。
-    /// </summary>
-    public OBSharpToolWindowOptions ToolOptions;
+    public OBSharpWindowOptions WindowOptions;
 
     /// <summary>
     /// 建一个只填浏览器参数的缓冲区。
@@ -48,40 +42,19 @@ internal sealed unsafe class NativeOptionsBuffer : IDisposable
     }
 
     /// <summary>
-    /// 建一个填好停靠窗口参数的缓冲区（浏览器参数在 <see cref="DockOptions"/> 里）。
+    /// 建一个填好普通窗口参数的缓冲区。
     /// </summary>
-    public static NativeOptionsBuffer CreateDock(
-        DockWindowOptions options, OBSharpBrowserCallbacks browserCallbacks, OBSharpWindowCallbacks windowCallbacks)
+    /// <remarks>
+    /// 窗口是纯容器，参数里<b>没有</b>浏览器字段：页面另外用
+    /// <see cref="CefBrowser"/> 建，再 set <see cref="CefWindow.Content"/>。
+    /// </remarks>
+    public static NativeOptionsBuffer CreateWindow(WindowOptions options, OBSharpWindowCallbacks windowCallbacks)
     {
         var buffer = new NativeOptionsBuffer
         {
-            DockOptions =
+            WindowOptions =
             {
-                Size = (uint)sizeof(OBSharpDockWindowOptions),
-                Visible = options.Visible ? 1 : 0,
-                Width = options.Width,
-                Height = options.Height,
-                Callbacks = windowCallbacks,
-            },
-        };
-
-        buffer.DockOptions.Id = buffer.Alloc(options.Id);
-        buffer.DockOptions.Title = buffer.Alloc(options.Title);
-        buffer.FillBrowser(ref buffer.DockOptions.Browser, options.Browser, browserCallbacks);
-        return buffer;
-    }
-
-    /// <summary>
-    /// 建一个填好工具窗口参数的缓冲区（浏览器参数在 <see cref="ToolOptions"/> 里）。
-    /// </summary>
-    public static NativeOptionsBuffer CreateTool(
-        ToolWindowOptions options, OBSharpBrowserCallbacks browserCallbacks, OBSharpWindowCallbacks windowCallbacks)
-    {
-        var buffer = new NativeOptionsBuffer
-        {
-            ToolOptions =
-            {
-                Size = (uint)sizeof(OBSharpToolWindowOptions),
+                Size = (uint)sizeof(OBSharpWindowOptions),
                 Width = options.Width,
                 Height = options.Height,
                 Visible = options.Visible ? 1 : 0,
@@ -91,8 +64,7 @@ internal sealed unsafe class NativeOptionsBuffer : IDisposable
             },
         };
 
-        buffer.ToolOptions.Title = buffer.Alloc(options.Title);
-        buffer.FillBrowser(ref buffer.ToolOptions.Browser, options.Browser, browserCallbacks);
+        buffer.WindowOptions.Title = buffer.Alloc(options.Title);
         return buffer;
     }
 

@@ -3,6 +3,7 @@
 #include "Log.h"
 #include "SchemeHandler.h"
 
+#include <QtCore/QEvent>
 #include <QtCore/QObject>
 #include <QtGui/QColor>
 #include <QtGui/QPalette>
@@ -15,6 +16,83 @@
 
 namespace obsharp {
 namespace {
+
+// 吃掉浏览器 widget 上的「关闭」事件。
+//
+// 为什么需要：OBS 关掉停靠面板时（OBSDock::closeEvent）会主动给面板里的 widget 发一个
+// 关闭事件：
+//
+//     QEvent widgetEvent(QEvent::Type(QEvent::User + QEvent::Close));   // = 1019，不是 19
+//     qApp->sendEvent(widget(), &widgetEvent);
+//
+// 注意类型是**自定义**的 1019，不是 QEvent::Close(19)（我们第一版就错在这里，所以没拦住）。
+// obs-browser 的 QCefWidget 收到它就会 closeBrowser()，那块 CEF 从此报废：停靠面板
+// 重新显示时只剩空白，而且不会重新加载 —— 用户看到的现象就是「dock 只在第一次有 CEF」。
+//
+// 面板的显隐归 OBS 的 dock 管（Qt 自己会处理 hide），不需要让 CEF 跟着「关」。
+// 事件过滤器在 widget 自己的 event() 之前执行，返回 true 就能把事件彻底拦住。
+//
+// 不用 Q_OBJECT：eventFilter 是 QObject 的虚函数，覆写它不需要 moc。
+class CloseEventGuard : public QObject {
+public:
+	// OBS 用来通知 dock 内容「被关了」的自定义事件类型（见上面的分析）。
+	static constexpr int kObsDockCloseEvent = QEvent::User + QEvent::Close;
+
+	explicit CloseEventGuard(QObject *parent) : QObject(parent) {}
+
+protected:
+	bool eventFilter(QObject *watched, QEvent *event) override {
+		const int type = static_cast<int>(event->type());
+
+		// 两个都拦：1019 是 OBS 的 dock 关闭通知，19 是普通 Qt 关闭语义
+		//（比如父窗口被 close 时 Qt 自己发的）。面板不该因为「被关了一下」就毁掉 CEF。
+		if (type == kObsDockCloseEvent || type == QEvent::Close) {
+			// Debug 级别：这是排查用的细节，不该在正常运行时刷屏。
+			// 注意 Debug 在 OBS 默认配置下看不到（blog 会按日志级别过滤），
+			// 需要时用 --verbose 启动 OBS。
+			LogDebug("blocked a close event on the browser widget (type=" + std::to_string(type) + ")");
+			return true;
+		}
+
+		// 记录显隐，并按需「踢」一下 CEF 让它重绘。
+		//
+		// 为什么要踢：CEF 用无窗口渲染（OSR），widget 被隐藏后它就不再画了；重新
+		// 显示时 Qt 只是把旧的后备缓冲贴上去，而 CEF 那边没有收到 WasResized /
+		// Invalidate，于是看着就是一块空白。
+		//
+		// 注意这只解决了「画面不刷新」，解决不了「页面在隐藏期间停掉」——
+		// 后者在 OBS 的停靠面板上是实测会发生的（重新显示后连 HTTP 请求都没有），
+		// 所以停靠面板这条路目前不推荐使用，见 SDK README。
+		if (auto *widget = qobject_cast<QWidget *>(watched)) {
+			if (event->type() == QEvent::Show) {
+				LogDebug("browser widget shown; nudging CEF to repaint");
+				NudgeRepaint(widget);
+			} else if (event->type() == QEvent::Hide) {
+				LogDebug("browser widget hidden");
+			}
+		}
+
+		return QObject::eventFilter(watched, event);
+	}
+
+private:
+	// 让 CEF 重新计算视口并重绘。
+	//
+	// 只能通过 QWidget 的公开接口做：把尺寸改一下再改回来，QCefWidget 的
+	// resizeEvent 会转成 CefBrowserHost::WasResized()，OSR 随之重新出帧。
+	// 改不动（hide 期间尺寸被锁定）时退回 update()，至少触发一次 paint。
+	static void NudgeRepaint(QWidget *widget) {
+		const QSize size = widget->size();
+		if (size.width() <= 0 || size.height() <= 0) {
+			widget->update();
+			return;
+		}
+
+		widget->resize(size.width() + 1, size.height() + 1);
+		widget->resize(size);
+		widget->update();
+	}
+};
 
 // 引导脚本：定义 window.obsharp.post()，把消息发到我们自己的 scheme handler
 // （POST /__obsharp/message，见 SchemeHandler.cpp 的 kMessageTarget）。
@@ -324,6 +402,14 @@ std::unique_ptr<BrowserWidget> BrowserWidget::Create(const obsharp_browser_optio
 	self->host_ = config.host;
 	self->scheme_ = config.scheme;
 
+	// 拦掉 Qt 关窗事件：OBS 关掉停靠面板时（OBSDock::closeEvent）会主动给里面的
+	// widget 发一个 QEvent::Close，而 obs-browser 的 QCefWidget 收到它会 closeBrowser()
+	// —— 那块 CEF 就废了，之后重新显示面板只剩空白、也不会重新加载。
+	//
+	// 面板的显隐归 OBS 的 dock 管，不需要让 CEF 跟着“关”。这里装一个过滤器把事件吃掉。
+	self->closeGuard_ = new CloseEventGuard(cefWidget);
+	cefWidget->installEventFilter(self->closeGuard_);
+
 	if (safe.transparent) {
 		cefWidget->setAttribute(Qt::WA_TranslucentBackground);
 		cefWidget->setAutoFillBackground(false);
@@ -356,7 +442,11 @@ std::unique_ptr<BrowserWidget> BrowserWidget::Create(const obsharp_browser_optio
 			 SLOT(OnTitleChanged(QString)));
 	QObject::connect(cefWidget, SIGNAL(urlChanged(QString)), self->sink_.get(), SLOT(OnUrlChanged(QString)));
 
-	LogDebug("browser widget created for " + url);
+	// 用 Info：这条是排查「页面停在 about:blank」时最先要看的东西 —— 它直接给出
+	// 交给 CEF 的 URL 和 scheme/domain/host 的组合。Debug 级别在 OBS 默认配置下看不到。
+	LogInfo("browser widget created: url=" + url + " scheme=" + config.scheme + " domain=" + config.domain +
+		" host=" + (config.host.empty() ? std::string("(none)") : config.host) +
+		" endpoint=" + (config.hasEndpoint ? config.endpoint.address : std::string("(none)")));
 	return self;
 }
 
@@ -364,17 +454,33 @@ BrowserWidget::~BrowserWidget() {
 	if (!widget_)
 		return;
 
-	// 先断开信号，再关浏览器，避免回调打到半销毁的对象上。
+	// 先断开信号，再摘掉关闭事件过滤器，最后关浏览器，避免回调打到半销毁的对象上。
 	if (sink_)
 		QObject::disconnect(widget_, nullptr, sink_.get(), nullptr);
+
+	if (closeGuard_) {
+		widget_->removeEventFilter(closeGuard_);
+		// closeGuard_ 的 parent 是 widget_，会跟着它一起销毁；这里只是撤销引用。
+		closeGuard_ = nullptr;
+	}
 
 	if (cef_)
 		cef_->closeBrowser();
 
 	// widget_ 是我们用 QCef::create_widget() 创建的，归我们释放。用 deleteLater
 	// 推迟到事件循环里，避免在信号处理过程中直接 delete。
+	//
+	// 但如果它已经被 OBS 收养（交给 obs_frontend_add_dock_by_id 之后，OBS 会
+	// setWidget，所有权转到 QDockWidget），这里就**不能**再删：那是二次释放。
+	// 判据是它的 parent 已经不是我们设的那个（OBS 接管时会 reparent）。
 	widget_->hide();
-	widget_->deleteLater();
+
+	if (widget_->parent() == nullptr) {
+		widget_->deleteLater();
+	} else {
+		// 已经有父级：所有权在别人手里，只把引用丢掉。
+		LogDebug("browser widget is owned elsewhere; leaving it to its parent");
+	}
 
 	cef_ = nullptr;
 	widget_ = nullptr;

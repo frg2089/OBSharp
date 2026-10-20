@@ -1,17 +1,23 @@
 namespace OBSharp.Interop.Browser;
 
 /// <summary>
-/// 建一个工具窗口所需的参数。对应原生头文件里的 <c>obsharp_tool_window_options</c>。
+/// 建一个普通顶层窗口所需的参数。对应原生头文件里的 <c>obsharp_window_options</c>。
 /// </summary>
 /// <remarks>
-/// 工具窗口是一个独立的顶层窗口（<c>Qt::Window | Qt::Tool</c>），内含浏览器 Widget。
-/// 用户点关闭时只会隐藏窗口并触发 <see cref="WindowCallbacks.CloseRequested"/>，
-/// 要真正销毁请调 <see cref="CefToolWindow.Dispose"/>。
+/// <para>
+/// 这是一个<b>纯 Qt 容器</b>：只建一个 <c>Qt::Window</c> 顶层窗口（普通标题栏、进任务栏、
+/// 可单�� Alt+Tab），**不含浏览器**。页面请另外用 <see cref="CefBrowser"/> 建，再把它的
+/// <see cref="CefBrowser.Widget"/> 交给 <see cref="CefWindow.Content"/>。
+/// </para>
+/// <para>
+/// 这样拆开的好处：同一个浏览器 Widget 也能交给 OBS 的
+/// <c>obs_frontend_add_dock_by_id()</c> 做停靠面板，不必为此再引入一套窗口类型。
+/// </para>
 /// </remarks>
-public sealed class ToolWindowOptions
+public sealed class WindowOptions
 {
     /// <summary>
-    /// 窗口标题。为 <see langword="null"/> 时用 host 名，没有 host 时用 URL 的 host。
+    /// 窗口标题。为 <see langword="null"/> 时为空。
     /// </summary>
     public string? Title { get; init; }
 
@@ -44,10 +50,4 @@ public sealed class ToolWindowOptions
     /// 窗口事件，默认什么都不挂。
     /// </summary>
     public WindowCallbacks Callbacks { get; init; } = new();
-
-    /// <summary>
-    /// 浏览器参数；<see cref="BrowserOptions.Url"/> 为 <see langword="null"/> 且给了
-    /// <see cref="BrowserOptions.Host"/> 时访问 <c>obsharp://&lt;host&gt;/</c>。
-    /// </summary>
-    public BrowserOptions Browser { get; init; } = new();
 }

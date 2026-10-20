@@ -17,7 +17,7 @@ namespace OBSharp.Interop.Browser;
 /// <c>delete</c>：<see cref="Dispose"/> 会一并销毁。
 /// </para>
 /// <para>
-/// 窗口（<see cref="CefDockWindow"/> / <see cref="CefToolWindow"/>）里的浏览器是
+/// 窗口（<see cref="CefWindow"/>）里的浏览器是，
 /// <see cref="Wrap"/> 包装的借用句柄：<see cref="Dispose"/> 只释放托管侧，不会销毁
 /// 原生对象（它归窗口所有）。
 /// </para>
@@ -79,7 +79,7 @@ public sealed unsafe class CefBrowser : IDisposable
     /// </summary>
     /// <param name="handle"><c>obsharp_browser*</c>，必须非 0。</param>
     /// <remarks>
-    /// 用于 <see cref="CefDockWindow.Browser"/> / <see cref="CefToolWindow.Browser"/>：
+    /// 用于 <see cref="CefWindow.Content"/>：
     /// 原生对象归窗口所有，<see cref="Dispose"/> 只清掉托管包装，不会销毁它。
     /// </remarks>
     internal static CefBrowser Wrap(nint handle)

@@ -10,6 +10,18 @@
  *
  * 字符串一律是 NUL 结尾的 UTF-8。
  *
+ * 设计边界（重要）
+ * ----------------
+ * 这个库**只做一件事**：把 CEF 包成一个 Qt Widget，外加一个可选的普通顶层窗口容器。
+ * 它**不**碰 OBS 的停靠面板（那是 obs_frontend_add_dock_by_id 的事，由托管侧调）。
+ *
+ *   * 停靠面板：托管侧拿 obsharp_browser_widget() 的 QWidget*，交给
+ *     obs_frontend_add_dock_by_id(id, title, widget)。OBS 自己会建 QDockWidget、
+ *     挂进主窗口、**并且自动加「停靠窗口」菜单项**（内部走 AddDockWidget），
+ *     所以本库不再提供任何 dock 相关 API，也不需要什么 add_menu_item。
+ *   * 工具窗口：obsharp_window_* 提供一个普通顶层窗口（Qt::Window），托管侧把
+ *     browser widget 放进去，或者干脆自己拿 widget 塞进任何容器。
+ *
  * 线程模型
  * --------
  *   * 除 obsharp_browser_native_initialize / obsharp_browser_native_is_available 外，其余函数都
@@ -23,10 +35,11 @@
  *   * 传进来的字符串由调用方所有，函数返回后即可释放。
  *   * 返回的 const char* 归库所有：下一次同类调用、或对象销毁后失效，需要保留
  *     就自己拷一份。
- *   * 窗口句柄归调用方所有：用完必须 * _destroy()。
- *   * obsharp_*_window_browser() 返回的浏览器句柄是借用的，不要 obsharp_browser_destroy()。
+ *   * obsharp_browser / obsharp_window 句柄归调用方所有：用完必须 _destroy()。
+ *   * obsharp_browser_widget() 返回的 QWidget* 归浏览器所有，不要自己 delete；
+ *     交给 OBS 之前**不要**把它挂到别的父级上。
  *
- * host 与窗口
+ * host 与地址
  * -----------
  *   * host 是「一个名字 + 一台 Kestrel」。端点由 OB# 的托管侧（SDK）起监听：
  *     Windows 是命名管道 \\.\pipe\obsharp\<host>，Unix 是 /tmp/obsharp/<host>.socket。
@@ -37,7 +50,6 @@
  *     不进网络栈、不握手、不加解密。对页面来说来源是 https，因此落在安全上下文里
  *     （crypto.subtle / serviceWorker / clipboard 这些 API 可用），而实际传输仍是
  *     明文的进程内 IPC，没有加密开销。
- *   * host 和窗口彼此独立：可以只注册 host 不开窗口，也可以开窗口指向普通地址。
  *
  * 已知限制
  * --------
@@ -52,7 +64,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define OBSHARP_BROWSER_NATIVE_ABI_VERSION 2u
+#define OBSHARP_BROWSER_NATIVE_ABI_VERSION 3u
 
 #if defined(_WIN32)
 #if defined(OBSHARP_BROWSER_NATIVE_BUILD)
@@ -73,11 +85,8 @@ extern "C" {
 /* 不透明句柄：一个 CEF 浏览器 Widget 实例。 */
 typedef struct obsharp_browser obsharp_browser;
 
-/* 不透明句柄：一个停靠窗口（QDockWidget + 里面的浏览器）。 */
-typedef struct obsharp_dock_window obsharp_dock_window;
-
-/* 不透明句柄：一个工具窗口（独立顶层窗口 + 里面的浏览器）。 */
-typedef struct obsharp_tool_window obsharp_tool_window;
+/* 不透明句柄：一个普通顶层窗口容器（可选的便利设施，见下）。 */
+typedef struct obsharp_window obsharp_window;
 
 /* 返回码。0 表示成功，负数是错误。 */
 typedef enum obsharp_result {
@@ -185,6 +194,8 @@ typedef struct obsharp_browser_options {
 	/*
 	 * 父窗口。Windows 上按 HWND 解释（内部走 QWidget::find，找不到再当成
 	 * QWidget*）；其它平台直接当成 QWidget*。可以为 NULL，此时 Widget 没有父级。
+	 *
+	 * 走停靠面板时传 NULL：OBS 的 add_dock_by_id 会自己 setWidget。
 	 */
 	void *parent_widget;
 
@@ -198,7 +209,7 @@ typedef struct obsharp_browser_options {
 	 *   * url 为 NULL 时用 "obsharp://<host>/"；
 	 *   * url 以 "obsharp://" 开头时，里面的 host 必须与这个字段一致；
 	 *   * 注入的引导脚本里多出 window.obsharp.host / window.obsharp.url。
-	 * 为 NULL 时行为与 v1 完全一致。
+	 * 为 NULL 时行为与 v1 一致。
 	 */
 	const char *host;
 } obsharp_browser_options;
@@ -209,49 +220,22 @@ typedef void(OBSHARP_BROWSER_NATIVE_CALL *obsharp_window_event_fn)(void *user);
 typedef struct obsharp_window_callbacks {
 	/* 原样透传，不参与生命周期管理。 */
 	void *user;
-	/*
-	 * 用户点了关闭（工具窗口）：窗口已经被隐藏，不会自动销毁。可 NULL。
-	 * 停靠窗口不用它（关不关由 OBS 的 dock 决定）。
-	 */
+	/* 用户点了关闭：窗口已经被隐藏，不会自动销毁。可 NULL。 */
 	obsharp_window_event_fn on_close_requested;
 } obsharp_window_callbacks;
 
 /*
- * 停靠窗口的创建参数。
+ * 普通顶层窗口的创建参数。
  *
- * size 必须填成 sizeof(obsharp_dock_window_options)。
- * browser.size 可以是 0（全用默认值）或 sizeof(obsharp_browser_options)。
+ * size 必须填成 sizeof(obsharp_window_options)。
+ *
+ * 这是一个**纯容器**：它只建一个 Qt::Window 顶层窗口，把浏览器 Widget 放进去，
+ * 不碰 OBS。停靠面板请直接用 obsharp_browser_widget() + obs_frontend_add_dock_by_id。
  */
-typedef struct obsharp_dock_window_options {
+typedef struct obsharp_window_options {
 	uint32_t size;
 
-	/* OBS 停靠面板 id（也是 QDockWidget 的 objectName）。NULL 时用 host 名。 */
-	const char *id;
-	/* 面板标题。NULL 时用 host 名，没有 host 时用 URL 的 host。 */
-	const char *title;
-
-	/* 创建后是否立刻显示，默认 0。 */
-	int32_t visible;
-	/* 初始尺寸，<= 0 时用 640x480。 */
-	int32_t width;
-	int32_t height;
-
-	obsharp_window_callbacks callbacks;
-
-	/* 浏览器参数；url 为 NULL 且给了 host 时访问 "obsharp://<host>/"。 */
-	obsharp_browser_options browser;
-} obsharp_dock_window_options;
-
-/*
- * 工具窗口的创建参数。
- *
- * size 必须填成 sizeof(obsharp_tool_window_options)。
- * browser.size 可以是 0（全用默认值）或 sizeof(obsharp_browser_options)。
- */
-typedef struct obsharp_tool_window_options {
-	uint32_t size;
-
-	/* 窗口标题。NULL 时用 host 名，没有 host 时用 URL 的 host。 */
+	/* 窗口标题。NULL 时为空。 */
 	const char *title;
 
 	/* 初始尺寸，<= 0 时用 720x480。 */
@@ -266,17 +250,14 @@ typedef struct obsharp_tool_window_options {
 	int32_t resizable;
 
 	obsharp_window_callbacks callbacks;
-
-	/* 浏览器参数；url 为 NULL 且给了 host 时访问 "obsharp://<host>/"。 */
-	obsharp_browser_options browser;
-} obsharp_tool_window_options;
+} obsharp_window_options;
 
 /* ---- 版本与初始化 ------------------------------------------------------- */
 
 /* 编译进库的 ABI 版本；跟头文件里的 OBSHARP_BROWSER_NATIVE_ABI_VERSION 比对。 */
 OBSHARP_BROWSER_NATIVE_API uint32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_native_abi_version(void);
 
-/* 人类可读的版本串，形如 "0.2.0"。静态存储，永远有效。 */
+/* 人类可读的版本串，形如 "0.3.0"。静态存储，永远有效。 */
 OBSHARP_BROWSER_NATIVE_API const char *OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_native_version(void);
 
 /*
@@ -303,26 +284,29 @@ typedef void(OBSHARP_BROWSER_NATIVE_CALL *obsharp_ui_action_fn)(void *user);
 OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL
 obsharp_browser_native_invoke_ui(obsharp_ui_action_fn fn, void *user);
 
-/* ---- 浏览器生命周期 ----------------------------------------------------- */
+/* ---- 浏览器（全部要求 Qt 主线程） -------------------------------------- */
 
 /*
  * 创建浏览器并返回句柄；失败返回 NULL（用 obsharp_browser_native_last_error() 看原因）。
- * 必须在 Qt 主线程调用。callbacks 里的函数指针会在 UI 线程被调用。
+ * callbacks 里的函数指针会在 UI 线程被调用。
  */
 OBSHARP_BROWSER_NATIVE_API obsharp_browser *OBSHARP_BROWSER_NATIVE_CALL
 obsharp_browser_create(const obsharp_browser_options *options);
 
-/* 销毁浏览器。必须在 Qt 主线程调用；传 NULL 是空操作。 */
+/* 销毁浏览器（连带它自己的 QWidget）。传 NULL 是空操作。 */
 OBSHARP_BROWSER_NATIVE_API void OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_destroy(obsharp_browser *browser);
 
 /*
- * 底层的 QWidget*。调用方可以自己 setParent / 塞进 dock，或者交给
- * obs_frontend_add_dock_by_id()。Widget 归浏览器所有，destroy 时会一并销毁，
- * 不要自己 delete。句柄无效时返回 NULL。
+ * 底层的 QWidget*。调用方可以：
+ *   * 交给 obs_frontend_add_dock_by_id(id, title, widget)（OBS 会自己 setWidget）；
+ *   * 放进 obsharp_window_create() 建的窗口；
+ *   * 自己 setParent。
+ *
+ * Widget 归浏览器所有，destroy 时会一并销毁，不要自己 delete。
+ * 交给 OBS 之前不要先挂到别的父级上（OBS 的 add_dock_by_id 会 setWidget）。
+ * 句柄无效时返回 NULL。
  */
 OBSHARP_BROWSER_NATIVE_API void *OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_widget(obsharp_browser *browser);
-
-/* ---- 浏览器操作（全部要求 Qt 主线程） ---------------------------------- */
 
 /*
  * 导航到 url。url 以 "obsharp://" 开头时按该浏览器的 host 映射成
@@ -359,71 +343,40 @@ obsharp_browser_post_message(obsharp_browser *browser, const char *json);
 OBSHARP_BROWSER_NATIVE_API const char *OBSHARP_BROWSER_NATIVE_CALL
 obsharp_browser_current_url(obsharp_browser *browser);
 
-/* ---- 停靠窗口（全部要求 Qt 主线程） ------------------------------------ */
+/* ---- 普通顶层窗口（可选，全部要求 Qt 主线程） -------------------------- */
 
 /*
- * 创建停靠窗口：一个 QDockWidget（objectName = id、windowTitle = title），内容
- * 是本库创建的浏览器 Widget。返回 NULL 表示失败，原因见 last_error。
+ * 创建一个空的普通顶层窗口（Qt::Window，普通标题栏、进任务栏、可单独 Alt+Tab）。
+ * 之后用 obsharp_window_set_content() 把浏览器 Widget 放进去。
  *
- * 创建出来还没挂进 OBS：用 obsharp_dock_window_widget() 拿 QDockWidget* 交给
- * obs_frontend_add_custom_qdock(id, widget)（同样要在 Qt 主线程）。
+ * 文本类参数的语义：这是纯 Qt 容器，**不**读 host / URL。
  */
-OBSHARP_BROWSER_NATIVE_API obsharp_dock_window *OBSHARP_BROWSER_NATIVE_CALL
-obsharp_dock_window_create(const obsharp_dock_window_options *options);
+OBSHARP_BROWSER_NATIVE_API obsharp_window *OBSHARP_BROWSER_NATIVE_CALL
+obsharp_window_create(const obsharp_window_options *options);
+
+/* 销毁窗口。传 NULL 是空操作。**不会**销毁里面的浏览器 Widget。 */
+OBSHARP_BROWSER_NATIVE_API void OBSHARP_BROWSER_NATIVE_CALL obsharp_window_destroy(obsharp_window *window);
 
 /*
- * 销毁停靠窗口和里面的浏览器。调用方必须先从 OBS 摘掉（obs_frontend_remove_dock），
- * 否则 OBS 还引用着这个 QDockWidget。传 NULL 是空操作。
+ * 把 content（通常是 obsharp_browser_widget()）放进窗口，铺满。
+ * content 为 NULL 时清空。窗口不接管 content 的所有权：
+ * 销毁顺序应该是 obsharp_window_destroy() 之后（或之前都行，见 README）再 destroy 浏览器。
  */
-OBSHARP_BROWSER_NATIVE_API void OBSHARP_BROWSER_NATIVE_CALL
-obsharp_dock_window_destroy(obsharp_dock_window *window);
+OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL
+obsharp_window_set_content(obsharp_window *window, void *content);
 
-/* QDockWidget*（借用）。句柄无效时返回 NULL。 */
-OBSHARP_BROWSER_NATIVE_API void *OBSHARP_BROWSER_NATIVE_CALL
-obsharp_dock_window_widget(obsharp_dock_window *window);
+/* 窗口里的 QWidget*（借用）。没设内容时返回窗口本身。 */
+OBSHARP_BROWSER_NATIVE_API void *OBSHARP_BROWSER_NATIVE_CALL obsharp_window_widget(obsharp_window *window);
 
-/* 里面的浏览器句柄（借用，不要 destroy）。句柄无效时返回 NULL。 */
-OBSHARP_BROWSER_NATIVE_API obsharp_browser *OBSHARP_BROWSER_NATIVE_CALL
-obsharp_dock_window_browser(obsharp_dock_window *window);
-
-/* 显示 / 隐藏。第一次显示才真正创建 CEF 浏览器并访问 URL。 */
-OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_dock_window_show(obsharp_dock_window *window);
-OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_dock_window_hide(obsharp_dock_window *window);
+OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_window_show(obsharp_window *window);
+OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_window_hide(obsharp_window *window);
 /* 1 = 可见，0 = 不可见。 */
-OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL
-obsharp_dock_window_is_visible(obsharp_dock_window *window);
+OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_window_is_visible(obsharp_window *window);
 
 OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL
-obsharp_dock_window_set_title(obsharp_dock_window *window, const char *title);
+obsharp_window_set_title(obsharp_window *window, const char *title);
 OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL
-obsharp_dock_window_set_size(obsharp_dock_window *window, int32_t width, int32_t height);
-
-/* ---- 工具窗口（全部要求 Qt 主线程） ------------------------------------ */
-
-/*
- * 创建一个独立顶层窗口（Qt::Window | Qt::Tool），内容是本库创建的浏览器 Widget。
- * 用户点关闭时窗口只会隐藏，并通过 callbacks.on_close_requested 通知；
- * 要真正销毁请调 obsharp_tool_window_destroy()。
- */
-OBSHARP_BROWSER_NATIVE_API obsharp_tool_window *OBSHARP_BROWSER_NATIVE_CALL
-obsharp_tool_window_create(const obsharp_tool_window_options *options);
-
-OBSHARP_BROWSER_NATIVE_API void OBSHARP_BROWSER_NATIVE_CALL
-obsharp_tool_window_destroy(obsharp_tool_window *window);
-
-/* 里面的浏览器句柄（借用，不要 destroy）。句柄无效时返回 NULL。 */
-OBSHARP_BROWSER_NATIVE_API obsharp_browser *OBSHARP_BROWSER_NATIVE_CALL
-obsharp_tool_window_browser(obsharp_tool_window *window);
-
-OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_tool_window_show(obsharp_tool_window *window);
-OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_tool_window_hide(obsharp_tool_window *window);
-OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL
-obsharp_tool_window_is_visible(obsharp_tool_window *window);
-
-OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL
-obsharp_tool_window_set_title(obsharp_tool_window *window, const char *title);
-OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL
-obsharp_tool_window_set_size(obsharp_tool_window *window, int32_t width, int32_t height);
+obsharp_window_set_size(obsharp_window *window, int32_t width, int32_t height);
 
 /* ---- 传输辅助 ----------------------------------------------------------- */
 
