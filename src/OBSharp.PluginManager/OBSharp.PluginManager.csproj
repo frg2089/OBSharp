@@ -21,16 +21,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- 插件基类（ObsPlugin）、停靠面板（ObsPluginPanel）、host / 窗口。 -->
     <ProjectReference Include="..\OBSharp.SDK\OBSharp.SDK.csproj" />
-    <!-- 插件管理 API（OBSharpPluginManager 等）在 OBSharp.Runtime 里，是 internal 的：
-         本工程在它的 InternalsVisibleTo 里，所以能引用来编译。Private="false"：运行时用
-         的是宿主已经加载好的那一份，不能拷进插件目录（不然是第二份 OBSharp.Runtime）。 -->
     <ProjectReference Include="..\OBSharp.Runtime\OBSharp.Runtime.csproj" Private="false" />
   </ItemGroup>
 
-  <!-- 宿主提供的程序集（OBSharp.SDK / OBSharp.Interop / OBSharp.Interop.Browser /
-       OBSharp.Runtime …）不拷进插件输出。 -->
   <Import Project="..\OBSharp.SDK\build\OBSharp.SDK.targets" />
 
 </Project>

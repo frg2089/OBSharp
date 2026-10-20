@@ -80,12 +80,12 @@ public partial class Window : IDisposable
     /// <summary>
     /// 显示窗口。
     /// </summary>
-    public int Show() => obsharp_window_show(_native);
+    public virtual int Show() => obsharp_window_show(_native);
 
     /// <summary>
     /// 隐藏窗口。
     /// </summary>
-    public int Hide() => obsharp_window_hide(_native);
+    public virtual int Hide() => obsharp_window_hide(_native);
 
     /// <summary>
     /// 设置窗口标题。
