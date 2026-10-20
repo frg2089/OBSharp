@@ -4,7 +4,7 @@ namespace OBSharp.Interop.Browser;
 /// 建一个浏览器所需的参数。对应原生头文件里的 <c>obsharp_browser_options</c>，
 /// 但这里的字符串直到创建返回前都由托管侧托管，不用调用方操心。
 /// </summary>
-public sealed class BrowserOptions
+public sealed class WebViewOptions
 {
     /// <summary>
     /// 初始 URL。为 <see langword="null"/> 时用 <c>obsharp://&lt;host&gt;/</c>（给了
@@ -86,9 +86,4 @@ public sealed class BrowserOptions
     /// </para>
     /// </remarks>
     public string? Host { get; init; }
-
-    /// <summary>
-    /// 事件回调，默认什么都不挂。
-    /// </summary>
-    public BrowserCallbacks Callbacks { get; init; } = new();
 }

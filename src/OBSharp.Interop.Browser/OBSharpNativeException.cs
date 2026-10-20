@@ -1,30 +1,32 @@
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.Marshalling;
+
 namespace OBSharp.Interop.Browser;
 
-/// <summary>
-/// 原生库返回了失败码时抛出。消息里带上原生侧的
-/// <see cref="OBSharpNative.LastError"/>。
-/// </summary>
-public sealed class OBSharpNativeException : Exception
+[Serializable]
+public partial class OBSharpNativeException(OBSharpResult code, string message) : Exception(message)
 {
-    /// <summary>
-    /// 构造。
-    /// </summary>
-    /// <param name="result">原生返回码。</param>
-    /// <param name="message">原生 <c>obsharp_browser_native_last_error()</c> 的内容。</param>
-    public OBSharpNativeException(OBSharpResult result, string message)
-        : base($"OBSharp.Interop.Browser.Native 调用失败（{result}）：{message}")
-    {
-        Result = result;
-    }
-
     /// <summary>
     /// 原生返回码。
     /// </summary>
-    public OBSharpResult Result { get; }
+    public OBSharpResult Result { get; } = code;
 
-    internal static void ThrowIfFailed(OBSharpResult result)
+    public OBSharpNativeException(OBSharpResult code) : this(code, obsharp_browser_native_last_error())
+    { }
+
+    public static void ThrowIfFailed(int result) => ThrowIfFailed((OBSharpResult)result);
+
+    public static void ThrowIfFailed(OBSharpResult result)
     {
-        if (result != OBSharpResult.Ok)
-            throw new OBSharpNativeException(result, OBSharpNative.LastError);
+        if (result is OBSharpResult.Ok)
+            return;
+
+        throw new OBSharpNativeException(result);
     }
+
+    [LibraryImport("OBSharp.Interop.Browser.Native", EntryPoint = "obsharp_browser_native_last_error")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    [return: MarshalUsing(typeof(OBSStringMarshaller))]
+    private static partial string obsharp_browser_native_last_error();
 }

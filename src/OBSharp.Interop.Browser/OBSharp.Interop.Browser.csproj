@@ -3,4 +3,12 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OBSharp.Interop\OBSharp.Interop.csproj" />
+  </ItemGroup>
 </Project>

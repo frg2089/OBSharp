@@ -45,9 +45,4 @@ public sealed class WindowOptions
     /// 是否允许用户缩放窗口，默认允许。
     /// </summary>
     public bool Resizable { get; init; } = true;
-
-    /// <summary>
-    /// 窗口事件，默认什么都不挂。
-    /// </summary>
-    public WindowCallbacks Callbacks { get; init; } = new();
 }
