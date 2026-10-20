@@ -13,6 +13,7 @@
   <Project Path="src/OBSharp.Interop/OBSharp.Interop.csproj" />
   <Project Path="src/OBSharp.Interop.Browser/OBSharp.Interop.Browser.csproj" />
   <Project Path="src/OBSharp.Loader/OBSharp.Loader.csproj" />
+  <Project Path="src/OBSharp.PluginManager/OBSharp.PluginManager.csproj" />
   <Project Path="src/OBSharp.Runtime/OBSharp.Runtime.csproj" />
   <Project Path="src/OBSharp.SDK/OBSharp.SDK.csproj" />
 </Solution>

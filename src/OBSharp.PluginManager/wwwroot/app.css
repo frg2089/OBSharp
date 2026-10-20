@@ -1,0 +1,214 @@
+/* 插件管理器面板的样式。
+   就这点界面（一个表格 + 几个按钮），用不上任何前端框架，所以这里一份自己写的：
+   不引入依赖、构建不用联网，产物也就几 KB。浅色 / 深色跟着系统走。 */
+
+:root {
+    color-scheme: light dark;
+
+    --bg: #f6f7f9;
+    --fg: #1f2328;
+    --muted: #656d76;
+    --line: #d8dee4;
+    --surface: #ffffff;
+    --accent: #1b6ec2;
+    --accent-fg: #ffffff;
+    --ok: #1a7f37;
+    --danger: #b32121;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #1c1c1c;
+        --fg: #e6e6e6;
+        --muted: #9a9a9a;
+        --line: #3a3a3a;
+        --surface: #262626;
+        --accent: #4a9eff;
+        --accent-fg: #0b1220;
+        --ok: #4ac26b;
+        --danger: #ff7b72;
+    }
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html, body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+h1 {
+    margin: 0 0 .5rem;
+    font-size: 1.3rem;
+}
+
+code {
+    font-family: Consolas, "Cascadia Mono", monospace;
+    font-size: .85em;
+    word-break: break-all;
+}
+
+a {
+    color: var(--accent);
+}
+
+.content {
+    padding: 1rem 1.25rem;
+}
+
+.note {
+    margin: .35rem 0;
+    color: var(--muted);
+}
+
+.error {
+    color: var(--danger);
+}
+
+/* ---- 添加插件那一行 ---- */
+
+.add {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .5rem;
+    margin: 1rem 0;
+}
+
+.add label {
+    color: var(--muted);
+    white-space: nowrap;
+}
+
+.add input {
+    flex: 1 1 18rem;
+    min-width: 0;
+    padding: .35rem .5rem;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--surface);
+    color: inherit;
+    font: inherit;
+}
+
+.add input:focus {
+    border-color: var(--accent);
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+}
+
+/* ---- 按钮 ---- */
+
+.btn {
+    padding: .3rem .7rem;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--surface);
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+
+.btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.btn-primary {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--accent-fg);
+}
+
+.btn-primary:hover {
+    color: var(--accent-fg);
+    filter: brightness(1.1);
+}
+
+.btn-danger:hover {
+    border-color: var(--danger);
+    color: var(--danger);
+}
+
+.btn + .btn {
+    margin-left: .35rem;
+}
+
+/* ---- 插件列表 ---- */
+
+table.plugins {
+    width: 100%;
+    margin-top: .5rem;
+    border-collapse: collapse;
+}
+
+table.plugins th,
+table.plugins td {
+    padding: .5rem .5rem .5rem 0;
+    border-top: 1px solid var(--line);
+    text-align: left;
+    vertical-align: top;
+}
+
+table.plugins th {
+    color: var(--muted);
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+table.plugins .right {
+    padding-right: 0;
+    text-align: right;
+    white-space: nowrap;
+}
+
+/* ---- 状态 ---- */
+
+.status {
+    display: inline-block;
+    padding: 0 .45rem;
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    font-size: .8rem;
+}
+
+.status-on {
+    color: var(--ok);
+}
+
+.status-off {
+    color: var(--muted);
+}
+
+.status-fail {
+    color: var(--danger);
+}
+
+/* ---- 出错 / 成功提示 ---- */
+
+.alert {
+    margin: 0 0 1rem;
+    padding: .5rem .75rem;
+    border: 1px solid var(--danger);
+    border-left-width: 4px;
+    border-radius: 4px;
+    color: var(--danger);
+}
+
+.alert-ok {
+    border-color: var(--ok);
+    color: var(--ok);
+}
+
+/* ---- 插件名 ---- */
+
+.name {
+    font-weight: 600;
+    word-break: break-word;
+}

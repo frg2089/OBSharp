@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+@* 面板是交互式服务器渲染：这里的 blazor.web.js 是必须的（它负责建立 SignalR 长连接）。
+   它是 Library 项目，SDK 的 _AddBlazorFrameworkStaticWebAssets 只对 Exe 生效，所以
+   OBSharp.PluginManager.csproj 里自己把同一个文件登记成了静态资源（见那里的注释）。 *@
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <link rel="stylesheet" href="@Assets["app.css"]" />
+    <link rel="stylesheet" href="@Assets["OBSharp.PluginManager.styles.css"]" />
+    <link rel="icon" type="image/png" href="favicon.png" />
+    @* HeadOutlet 也要交互式：页面组件（Home）是 InteractiveServer，
+       如果这里是静态 SSR，<PageTitle> 这类 SectionContent 就跨了渲染模式边界，
+       运行时会报 "Sections cannot connect across render mode boundaries"，
+       而且 <title> 不会被填上。 *@
+    <HeadOutlet @rendermode="InteractiveServer" />
+</head>
+
+<body>
+    <Routes />
+    <script src="@Assets["_framework/blazor.web.js"]"></script>
+</body>
+
+</html>

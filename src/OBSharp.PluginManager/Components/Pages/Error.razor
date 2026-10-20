@@ -1,0 +1,23 @@
+﻿@page "/Error"
+@using System.Diagnostics
+
+<PageTitle>出错了</PageTitle>
+
+<h1 class="error">出错了</h1>
+<p>处理这个请求的时候出了点问题，细节记在 OBS 的日志里。</p>
+
+@if (ShowRequestId)
+{
+    <p class="note">请求 ID：<code>@RequestId</code></p>
+}
+
+@code {
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private string? RequestId { get; set; }
+    private bool ShowRequestId => !string.IsNullOrEmpty(RequestId);
+
+    protected override void OnInitialized() =>
+        RequestId = Activity.Current?.Id ?? HttpContext?.TraceIdentifier;
+}

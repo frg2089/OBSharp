@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>OBSharp.PluginManager</RootNamespace>
+    <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+
+    <!-- 插件是被宿主（OBSharp.Runtime）载进 CoreCLR 的程序集，不是独立应用。
+         但这里必须是 Exe：SDK 的 _AddBlazorFrameworkStaticWebAssets 只在
+         OutputType=Exe 时才把 _framework/blazor.web.js 登记成静态资源，而交互式渲染
+         的页面必须有它（Library 的清单里没有，<script> 会 404）。
+         Program.cs 只是为了满足「Exe 要有入口点」而存在的占位，不会被运行。
+
+         UseAppHost=false：不要 apphost exe（插件是 dll，不是可执行文件）。
+         GenerateRuntimeConfigurationFiles=false：宿主提供运行时配置，插件自己不需要。 -->
+    <OutputType>Exe</OutputType>
+    <UseAppHost>false</UseAppHost>
+    <GenerateRuntimeConfigurationFiles>false</GenerateRuntimeConfigurationFiles>
+    <GenerateDependencyFile>true</GenerateDependencyFile>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 插件基类（ObsPlugin）、停靠面板（ObsPluginPanel）、host / 窗口。 -->
+    <ProjectReference Include="..\OBSharp.SDK\OBSharp.SDK.csproj" />
+    <!-- 插件管理 API（OBSharpPluginManager 等）在 OBSharp.Runtime 里，是 internal 的：
+         本工程在它的 InternalsVisibleTo 里，所以能引用来编译。Private="false"：运行时用
+         的是宿主已经加载好的那一份，不能拷进插件目录（不然是第二份 OBSharp.Runtime）。 -->
+    <ProjectReference Include="..\OBSharp.Runtime\OBSharp.Runtime.csproj" Private="false" />
+  </ItemGroup>
+
+  <!-- 宿主提供的程序集（OBSharp.SDK / OBSharp.Interop / OBSharp.Interop.Browser /
+       OBSharp.Runtime …）不拷进插件输出。 -->
+  <Import Project="..\OBSharp.SDK\build\OBSharp.SDK.targets" />
+
+</Project>
