@@ -12,7 +12,7 @@ public partial class WebView : IDisposable
     private readonly GCHandle _handle;
     private bool _disposedValue;
 
-    protected ILogger<WebView> Logger { get; }
+    protected ILogger Logger { get; }
 
     /// <summary>
     /// 底层 <c>obsharp_browser*</c>。已释放时是 0。
@@ -65,7 +65,7 @@ public partial class WebView : IDisposable
     /// </summary>
     /// <param name="options">创建参数。</param>
     /// <param name="logger">日志记录器。</param>
-    public unsafe WebView(WebViewOptions options, ILogger<WebView> logger)
+    public unsafe WebView(WebViewOptions options, ILogger logger)
     {
         Logger = logger;
         _handle = GCHandle.Alloc(this);

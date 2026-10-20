@@ -237,9 +237,7 @@ internal sealed partial class OBSharpPluginManager
         //（插件名是插件自己的属性，恶意插件可能每次取值都往里塞东西）。
         string name = plugin.Name;
         string? description = plugin.Description;
-        plugin.Attach(new(
-            name,
-            GetDataFolder(name)));
+        plugin.Context = new(entry.Identifier, GetDataFolder(name));
         entry.SetLoaded(plugin, name, description);
 
         return plugin.Load();
@@ -274,7 +272,18 @@ internal sealed partial class OBSharpPluginManager
             // 而 host 的 Kestrel 和挂进 OBS 的停靠面板都不归加载上下文管，程序集卸载
             // 之后它们还在跑。这一步不阻塞（窗口同步销毁、host 丢后台停），所以放在
             // 释放加载上下文之前做 —— 之后再调，插件类型已经开始卸载了。
-            plugin.CloseContext();
+            //
+            // 收尾失败要记进日志（那是资源泄漏，不能当没发生），但不能让它中断卸载：
+            // 下面还要 loadContext.Unload()，否则程序集永远卸不掉。
+            try
+            {
+                if (plugin is IDisposable disposable)
+                    disposable.Dispose();
+            }
+            catch (Exception ex)
+            {
+                LogCloseContextFailed(ex, entry.AssemblyPath);
+            }
         }
 
         OBSharpPluginLoadContext? loadContext = entry.LoadContext;
@@ -404,6 +413,10 @@ internal sealed partial class OBSharpPluginManager
 
     [LoggerMessage(LogLevel.Error, "Plugin {PluginPath} failed to unload")]
     private partial void LogUnloadPluginFailed(Exception exception, string pluginPath);
+
+    [LoggerMessage(LogLevel.Error,
+        "Plugin {PluginPath} left resources behind while unloading (windows, browsers or hosts were not disposed)")]
+    private partial void LogCloseContextFailed(Exception exception, string pluginPath);
 
     [LoggerMessage(LogLevel.Error, "Plugin {PluginType} failed in PostLoad")]
     private partial void LogPostLoadFailed(Exception exception, Type pluginType);

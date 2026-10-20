@@ -19,9 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- 传递引用：插件引用 SDK 就顺带拿到 libobs 的绑定。 -->
     <ProjectReference Include="..\OBSharp.Interop\OBSharp.Interop.csproj" />
-    <!-- 同理：浏览器控件的托管绑定（原生库由它自己按 RID 复制）。 -->
     <ProjectReference Include="..\OBSharp.Interop.Browser\OBSharp.Interop.Browser.csproj" />
   </ItemGroup>
 

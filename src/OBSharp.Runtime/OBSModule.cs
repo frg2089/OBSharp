@@ -2,9 +2,8 @@
 using System.Runtime.InteropServices;
 using System.Text;
 
-using OBSharp.Runtime;
-
 using OBSharp.Interop;
+using OBSharp.Runtime;
 
 namespace OBSharp;
 

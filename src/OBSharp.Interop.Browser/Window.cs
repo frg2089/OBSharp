@@ -30,7 +30,7 @@ public partial class Window : IDisposable
     private readonly nint _native;
     private readonly GCHandle _handle;
     private bool _disposedValue;
-    protected ILogger<Window> Logger { get; }
+    protected ILogger Logger { get; }
 
     /// <summary>
     /// 当前内容的 <c>QWidget*</c>；没设内容时是窗口自己。
@@ -40,7 +40,7 @@ public partial class Window : IDisposable
     /// <summary>
     /// 是否可见。
     /// </summary>
-    public int IsVisible => obsharp_window_is_visible(_native);
+    public bool IsVisible => obsharp_window_is_visible(_native) is not 0;
 
     /// <summary>
     /// 用户点了窗口的关闭按钮：原生侧已经把窗口隐藏了。
@@ -50,7 +50,7 @@ public partial class Window : IDisposable
     /// </remarks>
     public event EventHandler? CloseRequested;
 
-    public unsafe Window(WindowOptions options, ILogger<Window> logger)
+    public unsafe Window(WindowOptions options, ILogger logger)
     {
         Logger = logger;
         _handle = GCHandle.Alloc(this);

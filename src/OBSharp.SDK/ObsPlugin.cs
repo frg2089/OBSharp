@@ -1,4 +1,8 @@
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace OBSharp;
 
@@ -9,8 +13,20 @@ namespace OBSharp;
 /// </summary>
 public abstract class ObsPlugin
 {
-    private ObsPluginContext? _context;
-    private WebApplicationBuilder? _builder;
+    /// <summary>
+    /// 宿主附加的环境信息。只有加载开始之后（<see cref="Load"/> 及以后）才可用。
+    /// </summary>
+    internal ObsPluginContext Context
+    {
+        get => field ?? throw new InvalidOperationException($"Plugin \"{GetType()}\" has not been attached by a host yet.");
+        set
+        {
+            if (field is not null)
+                throw new InvalidOperationException($"Plugin \"{GetType()}\" was already attached.");
+
+            field = value;
+        }
+    }
 
     /// <summary>
     /// 插件名。默认取插件程序集名（不含扩展名），同时用作数据目录名。
@@ -28,12 +44,6 @@ public abstract class ObsPlugin
     /// 插件描述，默认 null。
     /// </summary>
     public virtual string? Description => null;
-
-    /// <summary>
-    /// 宿主附加的环境信息。只有加载开始之后（<see cref="Load"/> 及以后）才可用。
-    /// </summary>
-    public ObsPluginContext Context => _context
-        ?? throw new InvalidOperationException($"Plugin \"{GetType()}\" has not been attached by a host yet.");
 
     /// <summary>
     /// 插件的数据目录，等于 <see cref="ObsPluginContext.DataFolder"/>。
@@ -63,49 +73,70 @@ public abstract class ObsPlugin
     /// </remarks>
     public virtual void Unload() { }
 
-    /// <summary>
-    /// 创建一个 <see cref="WebApplicationBuilder"/>，用于配置插件自己的 Web 应用。每个插件
-    /// 只能创建一个 Builder。
-    /// </summary>
-    /// <remarks>
-    /// 这个 Web 应用会被挂成 OBS 的一个停靠面板：应用跑起来（<c>Run</c> / <c>RunAsync</c>，
-    /// Kestrel 开始监听）之后，OB# 用浏览器连上它并调用 <c>obs_frontend_add_dock_by_id()</c>；
-    /// 应用停下时面板撤掉。进程里没有 obs-browser 时只是没有面板，应用本身照常。
-    /// </remarks>
-    protected WebApplicationBuilder CreateBuilder() => _builder ??= Context.CreateBuilder();
 
-    // 只有宿主（OBSharp.Runtime）会调用它。
-    internal void Attach(ObsPluginContext context)
+    public virtual WebApplicationBuilder CreateBuilder(string? name = null)
     {
-        if (_context is not null)
-            throw new InvalidOperationException($"Plugin \"{GetType()}\" was already attached.");
+        name ??= Name;
 
-        _context = context;
+        var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions
+        {
+            ApplicationName = name,
+            ContentRootPath = DataFolder,
+            WebRootPath = Path.Combine(DataFolder, "wwwroot"),
+        });
+
+        // 跟 ObsPluginContext.CreateBuilder() 一样：日志落进 OBS 日志，每行带插件标识符。
+        builder.Logging.AddProvider(new ObsLoggerProvider(Context.Identifier));
+
+        builder.WebHost.ConfigureKestrel(options =>
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                // Kestrel 的 ListenNamedPipe 会把名字接到 \\.\pipe\ 后面，
+                // 所以这里写 "obsharp\<name>"，实际端点就是 \\.\pipe\obsharp\<name>。
+                options.ListenNamedPipe("obsharp\\" + name);
+            }
+            else
+            {
+                var path = Path.Combine(Path.GetTempPath(), "obsharp", $"{name}.socket");
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                options.ListenUnixSocket(path);
+            }
+        });
+
+        builder.Services.AddHostedService(provider => new ObsPluginHostService(
+            name,
+            provider.GetRequiredService<ILogger<ObsPluginHostService>>()));
+
+        return builder;
     }
+}
 
-    /// <summary>
-    /// 收尾插件注册的 host / 窗口。由宿主在 <see cref="Unload"/> 之后调用。
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// 插件卸载（停用、回滚、宿主退出）时，宿主调完 <see cref="Unload"/> 就调这里：
-    /// 先释放插件开的窗口（停靠窗口先从 OBS 摘掉），再把 host 丢到后台停止，整个收尾
-    /// 不阻塞 OBS 的 Qt 主线程。
-    /// </para>
-    /// <para>
-    /// 幂等：多次调用无害。插件不用自己调它，自己先收拾也没关系 —— 收尾只处理还活着的对象。
-    /// </para>
-    /// </remarks>
-    internal void CloseContext()
+internal sealed partial class ObsPluginHostService(string name, ILogger<ObsPluginHostService> logger) : IHostedService
+{
+    public Task StartAsync(CancellationToken cancellationToken)
     {
+        if (OperatingSystem.IsWindows())
+            return Task.CompletedTask;
+
+        var path = Path.Combine(Path.GetTempPath(), "obsharp", $"{name}.socket");
         try
         {
-            _context?.Close();
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
         catch (Exception ex)
         {
-            // 卸载流程不能被收尾拖垮：收尾失败只记一笔，宿主继续卸加载上下文。
-            System.Diagnostics.Debug.WriteLine($"Closing the OB# context of plugin \"{GetType()}\" failed: {ex}");
+            LogException(ex, path);
         }
+
+        return Task.CompletedTask;
     }
+
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        return Task.CompletedTask;
+    }
+
+    [LoggerMessage(LogLevel.Error, Message = "OB# host socket \"{path}\" is readable by other users: SetUnixFileMode failed.")]
+    private partial void LogException(Exception ex, string path);
 }

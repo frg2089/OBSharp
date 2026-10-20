@@ -12,7 +12,7 @@ namespace OBSharp;
 /// 每行是 <c>[插件标识符] [级别] 分类: 消息</c>（跟宿主的 <c>[OBSharp] ...</c> 一个形状），
 /// scope 串在消息前面。
 /// </summary>
-internal sealed class ObsPluginLogger(string pluginId, string categoryName, IExternalScopeProvider scopes) : ILogger
+internal sealed class ObsLogger(string pluginId, string categoryName, IExternalScopeProvider scopes) : ILogger
 {
     // libobs 的 log level（blog 的第一个参数）：LOG_ERROR / LOG_WARNING / LOG_INFO / LOG_DEBUG / LOG_LOG。
     private const int ObsLogError = 100;
@@ -57,12 +57,12 @@ internal sealed class ObsPluginLogger(string pluginId, string categoryName, IExt
             _ => string.Empty,
         };
 
-        var text = new StringBuilder($"[{pluginId}] {level,-5} {categoryName,-16}: ");
+        StringBuilder? text = new($"[{pluginId}] {level,-5} {categoryName,-16}: ");
         scopes.ForEachScope(static (scope, builder) => builder.Append(scope).Append(": "), text);
         text.Append(formatter(state, exception));
 
         string line = text.ToString();
         Debug.WriteLine(line);
-        ObsExtensions.Log(obsLogLevel, line);
+        Obs.Log(obsLogLevel, line);
     }
 }

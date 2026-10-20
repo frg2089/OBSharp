@@ -8,15 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- 宿主固定跑在 ASP.NET Core 上（Loader 启动 CoreCLR 时带着 Microsoft.AspNetCore.App）：
-         ILogger、DI、Configuration、Options 都在共享框架里，不用再单独引包；
-         插件要用 ASP.NET Core 的类型也照着这么绑。 -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- 插件管理 API（OBSharpPluginManager 等）是 internal 的：只有插件管理器
-         （OBSharp.PluginManager）能拿到，普通插件拿不到。 -->
     <InternalsVisibleTo Include="OBSharp.PluginManager" />
   </ItemGroup>
 
