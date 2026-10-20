@@ -517,14 +517,42 @@ int KestrelSession::ReadBody(char *data, int length, std::string &error) {
 			return 0;
 
 		for (;;) {
-			// 先把缓冲里的数据搬出去。
-			int got = Take(data, length);
-			if (got > 0)
-				return got;
-
+			// 还有分块数据没读完：先把它搬出去。
+			//
+			// 注意顺序：Take() 只能在 remaining_ > 0（已经读过分块长度行、知道本块还剩
+			// 多少字节）时调用。否则缓冲区里的 "1464\r\n<html...>" 会被原样当正文吐出去
+			// —— 页面开头多出来的一串数字就是这个。
 			if (remaining_ > 0) {
-				// 分块数据还没读完。
+				// 一次最多只取「本块还剩的字节数」：Take() 不知道分块边界，
+				// 让它随便读会把下一块的 "26\r\n" 也搬进正文。
+				int want = static_cast<int>(std::min<int64_t>(remaining_, length));
+				int got = Take(data, want);
+				if (got > 0) {
+					remaining_ -= got;
+					if (remaining_ == 0)
+						pendingChunkCrlf_ = true; // 这一块读完了：下次先吃掉尾随 CRLF
+					return got;
+				}
+
+				if (eof_) {
+					error = "the Kestrel endpoint closed the connection mid-chunk";
+					return -1;
+				}
+
 				if (!Fill(error))
+					return -1;
+
+				continue;
+			}
+
+			// 一块刚读完：跳过块数据后面的 CRLF。
+			//
+			// HTTP 分块的格式是 "<size>CRLF<data>CRLF..."，那个尾随 CRLF 不属于正文。
+			// 不显式吃掉它的话，下一次 ReadLine 会读到一个空行（现在的 continue 能跳过），
+			// 但如果它恰好和下一块的数据一起被 Buffer，就可能混进正文 —— 实测尾部多出
+			// 的 "\r\n" 就是这个。
+			if (pendingChunkCrlf_) {
+				if (!SkipChunkTrailingCrlf(error))
 					return -1;
 
 				continue;
@@ -566,12 +594,66 @@ int KestrelSession::ReadBody(char *data, int length, std::string &error) {
 				return 0;
 			}
 
+			// 记下本块还剩多少「真数据」，下一轮循环直接 Take()。
+			// 读完这一块之后还要吃掉它尾随的 CRLF（见 pendingChunkCrlf_）。
 			remaining_ = size;
 		}
 	}
 	}
 
 	return 0;
+}
+
+// 跳过块数据后面的 CRLF（不属于正文）。
+//
+// 分块格式是 "<size>CRLF<data>CRLF"，那个尾随 CRLF 是协议开销。不显式消费它的话，
+// 它会被当成下一个「分块长度行」的开头 —— 而 ReadLine 读到空行时会 continue，
+// 表面上看没事；但如果它和下一块数据挤在同一批数据里，注解就会漏进正文
+//（实测尾部多出的 \r\n 就是）。
+bool KestrelSession::SkipChunkTrailingCrlf(std::string &error) {
+	for (;;) {
+		// 缓冲区里有字节就消费掉 CRLF。
+		if (rawPos_ < raw_.size()) {
+			if (raw_[rawPos_] == '\r' && rawPos_ + 1 < raw_.size() && raw_[rawPos_ + 1] == '\n') {
+				rawPos_ += 2;
+				Shrink();
+				pendingChunkCrlf_ = false;
+				return true;
+			}
+
+			// 只到 '\r'、下一篇还没来：等更多数据。
+			if (raw_[rawPos_] == '\r' && rawPos_ + 1 == raw_.size()) {
+				if (eof_) {
+					error = "unexpected end of response inside chunk trailer";
+					return false;
+				}
+
+				if (!Fill(error))
+					return false;
+
+				continue;
+			}
+
+			// 有的实现只在块之间发 LF；宽容一点。
+			if (raw_[rawPos_] == '\n') {
+				++rawPos_;
+				Shrink();
+				pendingChunkCrlf_ = false;
+				return true;
+			}
+
+			error = "malformed chunk terminator";
+			return false;
+		}
+
+		if (eof_) {
+			error = "unexpected end of response inside chunk trailer";
+			return false;
+		}
+
+		if (!Fill(error))
+			return false;
+	}
 }
 
 } // namespace obsharp

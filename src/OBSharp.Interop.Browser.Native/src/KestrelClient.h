@@ -104,6 +104,8 @@ private:
 	bool Fill(std::string &error);
 	// 从 raw_ 里取一行（不含 CRLF）。缓冲不足时继续 Fill。
 	bool ReadLine(std::string &line, std::string &error);
+	// 跳过块数据后面的 CRLF（分块协议的帧开销，不属于正文）。
+	bool SkipChunkTrailingCrlf(std::string &error);
 	// 把 raw_ 里已有的数据搬到 data（最多 length 字节），返回搬运字节数。
 	int Take(char *data, int length);
 	void Shrink();
@@ -115,6 +117,7 @@ private:
 	HttpResponseHead::Framing framing_ = HttpResponseHead::Framing::None;
 	int64_t remaining_ = 0; // Length / Chunked 模式下剩余未读字节
 	bool chunkDone_ = false; // Chunked 模式下已经读到 0 号分块
+	bool pendingChunkCrlf_ = false; // 一块刚读完，下一次先消费它的尾随 CRLF
 	bool eof_ = false;
 };
 

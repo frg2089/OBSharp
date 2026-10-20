@@ -398,6 +398,15 @@ bool KestrelResourceHandler::Open(CefRefPtr<CefRequest> request, bool &handleReq
 	if (timedOut)
 		ServeError(504, "Kestrel endpoint did not respond within 30s");
 
+	// 每条请求一行 Info：排查「页面停在 about:blank / 空白页」时，先看这里有没有
+	// 子资源请求（_framework/blazor.web.js、*.css、/_blazor/negotiate）以及状态码。
+	{
+		std::lock_guard<std::mutex> lock(stream_->mutex);
+		LogInfo(request->GetMethod().ToString() + " " + request->GetURL().ToString() + " -> " +
+			std::to_string(stream_->head.status) +
+			(stream_->error.empty() ? std::string() : (" (" + stream_->error + ")")));
+	}
+
 	// Open() 是同步完成的：|handle_request| 置真、返回 true，不用 callback。
 	handleRequest = true;
 	return true;
@@ -432,6 +441,17 @@ void KestrelResourceHandler::GetResponseHeaders(CefRefPtr<CefResponse> response,
 
 	response->SetHeaderMap(map);
 
+	// 关键：MIME 类型必须单独设。
+	//
+	// CefResponse 里 mime_type 和 Content-Type 头是两个独立字段：只把 Content-Type 塞进
+	// header map，CEF 的加载器读的是 GetMimeType()，拿不到就按未知类型处理 —— 结果是
+	// HTML 不会被解析成文档，页面停在 about:blank（或纯文本）。所以从 header 里取出来
+	// 单独设一遍。
+	if (const std::string mime = head.HeaderValue("Content-Type"); !mime.empty()) {
+		// 去掉 "; charset=utf-8" 这类参数：SetMimeType 只接受类型本身。
+		response->SetMimeType(CefString(mime.substr(0, mime.find(';'))));
+	}
+
 	if (head.framing == HttpResponseHead::Framing::Length)
 		responseLength = head.content_length;
 	else if (head.framing == HttpResponseHead::Framing::None)
@@ -450,27 +470,34 @@ bool KestrelResourceHandler::Read(void *dataOut, int bytesToRead, int &bytesRead
 	if (!stream_)
 		return false;
 
-	{
-		std::lock_guard<std::mutex> lock(stream_->mutex);
-		if (stream_->offset < stream_->buffer.size()) {
-			size_t available = stream_->buffer.size() - stream_->offset;
-			size_t count = bytesToRead <= 0 ? available
-							: (std::min)(available, static_cast<size_t>(bytesToRead));
-			std::memcpy(dataOut, stream_->buffer.data() + stream_->offset, count);
-			stream_->offset += count;
-			stream_->CompactLocked();
-			bytesRead = static_cast<int>(count);
-			return true;
-		}
+	std::lock_guard<std::mutex> lock(stream_->mutex);
 
-		if (stream_->finished)
-			return false; // 结束
-
-		// 现在没数据，等下一次 ResumeTask。
-		stream_->pendingRead = callback;
+	// 1. 缓冲区里还有数据：直接给。
+	if (stream_->offset < stream_->buffer.size()) {
+		size_t available = stream_->buffer.size() - stream_->offset;
+		size_t count = bytesToRead <= 0 ? available
+						: (std::min)(available, static_cast<size_t>(bytesToRead));
+		std::memcpy(dataOut, stream_->buffer.data() + stream_->offset, count);
+		stream_->offset += count;
+		stream_->CompactLocked();
+		bytesRead = static_cast<int>(count);
+		return true;
 	}
 
-	return false;
+	// 2. body 已经收完，缓冲也空了：响应结束。只有这里才 return false。
+	if (stream_->finished)
+		return false;
+
+	// 3. 还没数据（工作线程还在读 Kestrel）：挂起这次读。
+	//
+	// **必须 return true**。按 cef_resource_handler.h 的契约：
+	//   「把 data_out 记下来、bytes_read 置 0、return true，稍后执行 callback」
+	// return false 会被 CEF 当成「响应已经结束」，页面就被截断在缓冲区末尾
+	//（实测表现：DOM 停在 HTML 实体中间，比如 "...OB# 插&amp;#..."）。
+	// 数据到达时由 StartWorker 的工作线程投递 ResumeTask，在 IO 线程上
+	// 调 callback->Continue(可用字节数) 把这次读续上。
+	stream_->pendingRead = callback;
+	return true;
 }
 
 bool KestrelResourceHandler::Skip(int64_t bytesToSkip, int64_t &bytesSkipped,
