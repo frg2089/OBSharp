@@ -100,43 +100,12 @@ public abstract class ObsPlugin
             {
                 var path = Path.Combine(Path.GetTempPath(), "obsharp", $"{name}.socket");
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                if (File.Exists(path))
+                    File.Delete(path);
                 options.ListenUnixSocket(path);
             }
         });
 
-        builder.Services.AddHostedService(provider => new ObsPluginHostService(
-            name,
-            provider.GetRequiredService<ILogger<ObsPluginHostService>>()));
-
         return builder;
     }
-}
-
-internal sealed partial class ObsPluginHostService(string name, ILogger<ObsPluginHostService> logger) : IHostedService
-{
-    public Task StartAsync(CancellationToken cancellationToken)
-    {
-        if (OperatingSystem.IsWindows())
-            return Task.CompletedTask;
-
-        var path = Path.Combine(Path.GetTempPath(), "obsharp", $"{name}.socket");
-        try
-        {
-            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        }
-        catch (Exception ex)
-        {
-            LogException(ex, path);
-        }
-
-        return Task.CompletedTask;
-    }
-
-    public Task StopAsync(CancellationToken cancellationToken)
-    {
-        return Task.CompletedTask;
-    }
-
-    [LoggerMessage(LogLevel.Error, Message = "OB# host socket \"{path}\" is readable by other users: SetUnixFileMode failed.")]
-    private partial void LogException(Exception ex, string path);
 }

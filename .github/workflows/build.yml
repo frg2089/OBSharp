@@ -77,11 +77,21 @@ jobs:
       - name: 发布 Runtime
         run: dotnet publish src/OBSharp.Runtime --graph --artifacts-path artifacts --configuration Release --framework net11.0 --no-restore --no-build
 
+      - name: 发布 PluginManager
+        run: dotnet publish src/OBSharp.PluginManager --graph --artifacts-path artifacts --configuration Release --framework net11.0 --no-restore --no-build
+
       - name: 上传托管程序集
         uses: actions/upload-artifact@v7
         with:
           name: assemblies
           path: artifacts/publish/OBSharp.Runtime/release_net11.0/
+          if-no-files-found: error
+
+      - name: 上传 PluginManager 托管程序集
+        uses: actions/upload-artifact@v7
+        with:
+          name: pluginmanager-assemblies
+          path: artifacts/publish/OBSharp.PluginManager/release_net11.0/
           if-no-files-found: error
 
       - name: 上传构建缓存
@@ -299,7 +309,7 @@ jobs:
           sparse-checkout: |-
             src/OBSharp.Runtime/Data
 
-      - name: 下载完整程序集
+      - name: 下载运行时程序集
         uses: actions/download-artifact@v8
         with:
           name: runtime
@@ -314,9 +324,15 @@ jobs:
       - name: 复制 data
         shell: pwsh
         run: |-
-          $source = Get-Item -Path "src/OBSharp.Runtime/Data"
+          $source = "src/OBSharp.Runtime/Data/*"
           $destination = New-Item -ItemType Directory -Force -Path "out/${{ matrix.data }}"
           Copy-Item -Path $source -Destination $destination -Recurse -Force
+
+      - name: 下载插件管理器程序集
+        uses: actions/download-artifact@v8
+        with:
+          name: pluginmanager-assemblies
+          path: out/${{ matrix.data }}/OBSharp.PluginManager/
 
       - name: 创建 macOS 插件包 Info.plist
         if: ${{ startsWith(matrix.rid, 'osx-') }}
