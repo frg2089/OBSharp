@@ -320,8 +320,28 @@ set(OBSHARP_VERSION_FILE "0.0.0.0")
     Write-Step '④ Interop 绑定（会重写 src/OBSharp.Interop/Generated/）'
     Invoke-DotNet @('build', 'src/OBSharp.Interop.Generator', '--graph',
       '--artifacts-path', $ArtifactsPath, '-c', $Configuration, '-f', $Framework, '--no-restore')
-    Invoke-DotNet @('run', '--project', 'src/OBSharp.Interop.Generator',
-      '--artifacts-path', $ArtifactsPath, '-c', $Configuration, '-f', $Framework, '--no-restore', '--no-build')
+
+    # 用 `dotnet exec <dll>` 而不是 `dotnet run --project ...`。
+    #
+    # 两者跑的是同一个程序集，但在受限环境（本仓库的开发机上就有）里有决定性差别：
+    # 从 artifacts/ 下用 apphost（.exe）启动的进程，写权限被限制在工作区根目录，
+    # src/、out/ 和系统 temp 全部 Access denied —— 生成器要往 Generated/ 和 temp
+    # 写中间产物，直接就失败了。`dotnet exec` 由 dotnet 宿主自己加载程序集，不受这条
+    # 限制。CI 上两种都能跑，所以统一用 exec 没有副作用，还省掉一次 MSBuild 求值。
+    $generatorDll = Join-Path $ArtifactsPath "bin/OBSharp.Interop.Generator/$($ConfigName)_$Framework/OBSharp.Interop.Generator.dll"
+    if (-not (Test-Path -LiteralPath $generatorDll)) {
+      # 没带 -f 的构建布局是另一个目录名（不带 TFM 后缀）；兜一下，别让人猜。
+      $generatorDll = @(Get-ChildItem -Path (Join-Path $ArtifactsPath 'bin/OBSharp.Interop.Generator') -Recurse -Filter 'OBSharp.Interop.Generator.dll' -ErrorAction SilentlyContinue) |
+        Where-Object { $_.FullName -like "*$ConfigName*" } |
+        Sort-Object -Property LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName
+    }
+    if (-not $generatorDll -or -not (Test-Path -LiteralPath $generatorDll)) {
+      throw "找不到生成器程序集（$ArtifactsPath/bin/OBSharp.Interop.Generator/）。先不带 -SkipGenerator 重跑一次。"
+    }
+
+    Write-Detail "dotnet exec $generatorDll"
+    & dotnet exec $generatorDll
+    if ($LASTEXITCODE -ne 0) { throw "Interop 绑定生成失败（退出码 $LASTEXITCODE）" }
   }
 
   # ---- ⑤ dotnet job：编译 + 发布 ----------------------------------------------
