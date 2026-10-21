@@ -11,7 +11,26 @@
 
 cmake_minimum_required(VERSION 3.20)
 
-project(OBSharp.Interop.Browser.Native LANGUAGES CXX)
+# 仓库根。版本文件在根上，必须在 project() 之前读，才能把版本交给 project(VERSION)。
+get_filename_component(OBSHARP_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+
+# 版本号由 CI 的「生成版本文件」步骤写到仓库根，跟托管侧的 Directory.Version.props
+# 用同一份 GitVersion 输出；本地没有这个文件时用占位版本，保证随时能配置。
+#
+#   OBSHARP_VERSION          完整 semVer（进 obsharp_browser_native_version() 和文件属性）
+#   OBSHARP_VERSION_NUMERIC  major.minor.patch（给 project(VERSION) / Mach-O）
+#   OBSHARP_VERSION_FILE     四段数字（Windows 的 FILEVERSION）
+set(OBSHARP_VERSION "0.0.0-local")
+set(OBSHARP_VERSION_NUMERIC "0.0.0")
+set(OBSHARP_VERSION_FILE "0.0.0.0")
+include("${OBSHARP_REPO_ROOT}/Directory.Version.cmake" OPTIONAL)
+
+project(OBSharp.Interop.Browser.Native VERSION "${OBSHARP_VERSION_NUMERIC}" LANGUAGES CXX)
+
+# Windows 版本资源（src/version.rc.in）需要 RC 语言。放在 add_library 之前启用。
+if(WIN32)
+  enable_language(RC)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -26,8 +45,6 @@ endif()
 
 # Q_OBJECT（BrowserEventSink）需要 moc。
 set(CMAKE_AUTOMOC ON)
-
-get_filename_component(OBSHARP_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 
 # 输出目录：out/native/<arch>/<config>/OBSharp.Interop.Browser.Native.dll（或 .so/.dylib）。
 set(OBSHARP_NATIVE_OUTPUT_DIR
@@ -63,6 +80,8 @@ add_library(
   src/Export.h
   src/BrowserWidget.h
   src/BrowserWidget.cpp
+  src/FilePicker.h
+  src/FilePicker.cpp
   src/HostApi.h
   src/HostApi.cpp
   src/KestrelClient.h
@@ -78,7 +97,11 @@ add_library(
   src/Window.cpp)
 
 # 加 OBSHARP_BROWSER_NATIVE_BUILD 让公开头用 dllexport，否则 Windows 上啥都导不出来。
-target_compile_definitions(OBSharp.Interop.Browser.Native PRIVATE OBSHARP_BROWSER_NATIVE_BUILD=1)
+# 版本串由上面的 Directory.Version.cmake 注入，源码里不写死版本号。
+target_compile_definitions(
+  OBSharp.Interop.Browser.Native
+  PRIVATE OBSHARP_BROWSER_NATIVE_BUILD=1
+          "OBSHARP_BROWSER_NATIVE_VERSION=\"${OBSHARP_VERSION}\"")
 
 target_include_directories(
   OBSharp.Interop.Browser.Native
@@ -95,6 +118,38 @@ set_target_properties(
   PROPERTIES OUTPUT_NAME "OBSharp.Interop.Browser.Native"
              RUNTIME_OUTPUT_DIRECTORY "${OBSHARP_NATIVE_OUTPUT_DIR}/${OBSHARP_NATIVE_ARCH}/$<CONFIG>"
              LIBRARY_OUTPUT_DIRECTORY "${OBSHARP_NATIVE_OUTPUT_DIR}/${OBSHARP_NATIVE_ARCH}/$<CONFIG>")
+
+# Mach-O 的 current_version / compatibility_version 也跟 GitVersion 对齐。
+# Linux 上不设 VERSION / SOVERSION：那会把文件名变成 .so.1，托管侧按固定名字找库。
+if(APPLE)
+  if(OBSHARP_VERSION_NUMERIC MATCHES "^([0-9]+)\\.")
+    set(OBSHARP_VERSION_COMPAT "${CMAKE_MATCH_1}.0.0")
+  else()
+    set(OBSHARP_VERSION_COMPAT "0.0.0")
+  endif()
+
+  set_target_properties(
+    OBSharp.Interop.Browser.Native
+    PROPERTIES MACHO_CURRENT_VERSION "${OBSHARP_VERSION_NUMERIC}"
+               MACHO_COMPATIBILITY_VERSION "${OBSHARP_VERSION_COMPAT}")
+endif()
+
+# Windows 的版本资源：FILEVERSION / ProductVersion 等从同一份版本文件来。
+# rc.exe 的 FILEVERSION 要四段用逗号分隔的数字。
+if(WIN32)
+  if(OBSHARP_VERSION_FILE MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$")
+    string(REPLACE "." "," OBSHARP_VERSION_RC "${OBSHARP_VERSION_FILE}")
+  else()
+    set(OBSHARP_VERSION_RC "0,0,0,0")
+  endif()
+
+  configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/version.rc.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/version.rc"
+    @ONLY)
+
+  target_sources(OBSharp.Interop.Browser.Native PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/version.rc")
+endif()
 
 if(UNIX AND NOT APPLE)
   # Linux 上不要任何 DT_RPATH / DT_RUNPATH。
@@ -118,7 +173,25 @@ endif()
 
 if(MSVC)
   # 源码是 UTF-8（无 BOM），注释里有中文，不告诉 MSVC 就会按本地代码页解释。
-  target_compile_options(OBSharp.Interop.Browser.Native PRIVATE /utf-8)
+  #
+  # 可复现构建：/Brepro 用内容哈希代替时间戳，/pathmap 把源码绝对路径映射掉。
+  # Debug 下 VS 默认开增量链接 + EditAndContinue，/Brepro 跟它们不合（.obj 不写
+  # mtime）；发布产物（CI 只编 Release）才需要可复现，所以只在非 Debug 加。
+  target_compile_options(
+    OBSharp.Interop.Browser.Native
+    PRIVATE /utf-8
+            "$<$<NOT:$<CONFIG:Debug>>:/Brepro>"
+            "/pathmap:${OBSHARP_REPO_ROOT}=.")
+  target_link_options(
+    OBSharp.Interop.Browser.Native
+    PRIVATE "$<$<NOT:$<CONFIG:Debug>>:/Brepro>"
+            /PDBALTPATH:%_PDB%)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  # 去掉 __FILE__ / 调试信息里的绝对路径，换个构建目录不改变产物。
+  target_compile_options(
+    OBSharp.Interop.Browser.Native
+    PRIVATE "-ffile-prefix-map=${OBSHARP_REPO_ROOT}=."
+            "-fdebug-prefix-map=${OBSHARP_REPO_ROOT}=.")
 endif()
 
 if(WIN32)

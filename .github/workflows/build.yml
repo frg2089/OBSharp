@@ -59,6 +59,13 @@ jobs:
           "  </PropertyGroup>" >> Directory.Version.props
           "</Project>" >> Directory.Version.props
 
+          @"
+          # 由 CI 生成，勿入库；native CMake 构建读取本文件（见 src/OBSharp.Interop.Browser.Native/CMakeLists.txt）。
+          set(OBSHARP_VERSION "${{ steps.gitversion.outputs.semVer }}")
+          set(OBSHARP_VERSION_NUMERIC "${{ steps.gitversion.outputs.majorMinorPatch }}")
+          set(OBSHARP_VERSION_FILE "${{ steps.gitversion.outputs.assemblySemFileVer }}")
+          "@ | Set-Content -Path Directory.Version.cmake -Encoding utf8
+
       - name: 还原 .NET 工具
         run: dotnet tool restore
 
@@ -100,6 +107,7 @@ jobs:
           name: build-cache
           path: |-
             Directory.Version.props
+            Directory.Version.cmake
             artifacts/
             src/OBSharp.Interop/Generated/
           if-no-files-found: error

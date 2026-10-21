@@ -2,7 +2,7 @@
 
 一个跨平台原生动态库：把 **obs-browser 已经初始化好的 CEF** 包成 Qt Widget，交给
 OB# 的宿主插件用；页面里跑的是 Kestrel 通过命名管道 / Unix domain socket 送过来的
-HTTP 流。
+HTTP 流。另外提供文件选择对话框（打开文件 / 保存文件 / 选择文件夹），托管侧是异步封装。
 
 它自己不初始化 CEF、不创建 `CefApp`，也不带自己的 Chromium —— 全部复用 OBS 里
 obs-browser 的那一份（CEF 二进制 + `cef_dll_wrapper`）和 OBS 自己带的 Qt6。因此它
@@ -32,6 +32,7 @@ obs-browser 的那一份（CEF 二进制 + `cef_dll_wrapper`）和 OBS 自己带
 │    ├─ HostApi        obs-browser 面板接口（QCef/QCefWidget）声明
 │    ├─ BrowserWidget  QCefWidget 子类 + 引导脚本注入
 │    ├─ SchemeHandler  https://obsharp/* → Kestrel
+│    ├─ FilePicker     QFileDialog（打开 / 保存 / 选择文件夹）
 │    └─ KestrelClient  命名管道 / UDS 上的最小 HTTP/1.1 客户端
 │         │
 │         │  跨进程 / 跨线程：命名管道（Win）或 UDS（Unix）
@@ -174,6 +175,9 @@ Windows 那两个预设还有 `-debug` 变体（`win-arm64-debug` 之类）。Li
 
 要换成自己的 CEF / Qt6，加 `-DCEF_ROOT_DIR=... -DCMAKE_PREFIX_PATH=...`。
 
+版本号从仓库根的 `Directory.Version.cmake` 读（CI 生成、不入库）；本地没有时用
+`0.0.0-local`，想模拟 CI 的版本就在根目录按下面 CI 一节的格式放一份。
+
 ### 方式三：单独配置（不经过仓库根）
 
 本目录的 `CMakeLists.txt` 里也 include 了 `cmake/ObSharpDeps.cmake`，所以单独配置一样会
@@ -190,7 +194,7 @@ cmake --build out/build/native --config Release
 
 | 段 | job | 跑在 | 产物 artifact |
 | --- | --- | --- | --- |
-| 1. .NET 构建 | `dotnet` | `windows-2025-vs2026` | `managed-assemblies`（Runtime 那份托管程序集）、`build-output`（`Directory.Version.props` + `artifacts/` + `src/OBSharp.Interop/Generated/`） |
+| 1. .NET 构建 | `dotnet` | `windows-2025-vs2026` | `managed-assemblies`（Runtime 那份托管程序集）、`build-cache`（`Directory.Version.props` + `Directory.Version.cmake` + `artifacts/` + `src/OBSharp.Interop/Generated/`） |
 | 2. Native 矩阵 | `native` | 6 个 RID 各自挑 runner：`windows-2025-vs2026`（win-x64 / win-arm64）、`ubuntu-26.04`（linux-x64）、`ubuntu-26.04-arm`（linux-arm64）、`macos-26`（osx-x64 / osx-arm64） | `OBSharp.Interop.Browser.Native-<rid>`（原生库）、`OBSharp.Loader-<rid>`（Loader 的 publish） |
 | 3. 收 Runtime | `runtime` | `ubuntu-26.04` | `runtime`：`any/` 放托管程序集，`native/<rid>/` 放 6 个 RID 的原生库 |
 | 4. 组装插件 | `bundle` | `ubuntu-26.04`（6 个 RID 并行） | `OBSharp-<rid>`：摆好的插件目录（Windows / Linux 那份里面是 `OBSharp/`，macOS 是 `OBSharp.plugin/`） |
@@ -199,9 +203,17 @@ cmake --build out/build/native --config Release
 （`OBSharp.Interop.Generator` 的产出），干净 checkout 上不存在：`dotnet` job 跑一次生成器
 （ClangSharp 解析 libobs 头文件），原生矩阵直接下载现成的，省掉 6 次解析。
 
-同一个 artifact 里还带着 `Directory.Version.props`（GitVersion 按 git 历史算出来的版本号），
-它会落到仓库根，`Directory.Build.props` 里那句 `Import` 管的就是它；本地没这个文件，版本号
-就是 SDK 的默认 1.0.0。
+同一个 artifact 里还带着 `Directory.Version.props` 和 `Directory.Version.cmake`（同一份
+GitVersion 输出，只是分别给 MSBuild 和 CMake 读）。它们会落到仓库根：`Directory.Build.props`
+import 前者，本目录的 `CMakeLists.txt` 在 `project()` 之前 include 后者。本地没这两个文件时，
+托管侧用 SDK 默认版本，原生版本串是 `0.0.0-local`。
+
+原生库的版本号也走这份文件：`project(VERSION)`、`obsharp_browser_native_version()`、
+Windows 的版本资源（`src/version.rc.in`）、macOS 的 Mach-O
+`current_version` / `compatibility_version` 全部由 `OBSHARP_VERSION*` 生成。Windows 的
+Release 配置还加了 `/Brepro` + `/pathmap`，GCC / Clang 上加了
+`-ffile-prefix-map` / `-fdebug-prefix-map`，让同样的输入产出字节一致的库（至少时间戳、
+校验和与源码绝对路径不再变化）。
 
 第 2 段的 6 个 job 还会把 `lib/deps/` 里的压缩包按「系统 + 架构」缓存起来（`actions/cache`，
 key 里带着 `lib/obs-studio` 的依赖清单和 `cmake/ObSharpDeps.cmake` 的哈希）。只缓存压缩包、
@@ -290,10 +302,10 @@ OBSharp/                                OBSharp.plugin/
 ## 托管侧怎么用
 
 托管绑定在单独一个工程 `src/OBSharp.Interop.Browser/` 里，命名空间
-`OBSharp.Interop.Browser`，公开 `OBSharpNative`、`CefBrowser`、`BrowserOptions`、
-`BrowserCallbacks` 这几个类型。`OBSharp.SDK` 引用着它，所以插件只要引用 SDK 就能拿到
-这几个类型（宿主当然也会把程序集和原生库一起发布）；不碰浏览器的话，这份绑定会跟着
-`OBSharp.SDK.targets` 从插件输出里被去掉。
+`OBSharp.Interop.Browser`，公开 `WebView`、`WebViewOptions`、`Window`、
+`WindowOptions`、`FilePicker`、`FilePickerOptions`、`FilePickerResult` 这几个类型。`OBSharp.SDK` 引用着它，
+所以插件只要引用 SDK 就能拿到这几个类型（宿主当然也会把程序集和原生库一起发布）；
+不碰浏览器的话，这份绑定会跟着 `OBSharp.SDK.targets` 从插件输出里被去掉。
 
 `OBSharp.Interop.Browser.csproj` 会在
 `out/native/$(OBSharpNativeArch)/$(Configuration)` 存在时把原生库复制到输出目录
@@ -308,35 +320,94 @@ OBSharp/                                OBSharp.plugin/
 ```csharp
 using OBSharp.Interop.Browser;
 
-// 1. 解析 obs-browser、开始等 CEF；幂等，可在任意线程调用。
-OBSharpNative.Initialize("MyPlugin");
-
-// 2. 等 CEF 就绪（IsAvailable 为 true）后再建浏览器。
-using var browser = CefBrowser.Create(new BrowserOptions
+// 1. 建浏览器（构造即创建；CEF 还没起来时会等它，失败抛 OBSharpNativeException）。
+using var browser = new WebView(new WebViewOptions
 {
-    Endpoint = "obsharp-myplugin",                 // Kestrel 监听的命名管道名 / UDS 路径
-    Url = "https://obsharp/",                       // 省略时按 <scheme>://<domain>/（默认 https）
+    Host = "myplugin",                          // 页面走 obsharp://myplugin/，端点按平台推导
     StartupScript = "console.log('from native')",
-    Callbacks = new BrowserCallbacks
-    {
-        TitleChanged  = t => Console.WriteLine($"title: {t}"),
-        Message       = json => Console.WriteLine($"page: {json}"),
-        ConsoleMessage = (level, msg, src, line) => Console.WriteLine($"[{level}] {msg}"),
-    },
-});
+}, logger);
 
-// 3. 把 Widget 塞进 dock / setParent —— 但不要自己 delete，Dispose 时会一起销毁。
-//    Widget 就是个 QWidget*：交给 obs_frontend_add_dock_by_id()，或者自己 setParent。
+browser.TitleChanged += (_, e) => Console.WriteLine($"title: {e.Title}");
+browser.Message += (_, e) => Console.WriteLine($"page: {e.Json}");
+browser.ConsoleMessage += (_, e) => Console.WriteLine($"[{e.Level}] {e.Message}");
+
+// 2. 工具窗口：普通 Qt 顶层窗口，把浏览器 Widget 放进去。
+using var window = new Window(new WindowOptions
+{
+    Title = "My Plugin",
+    Width = 960,
+    Height = 640,
+}, logger);
+window.SetContent(browser.Widget);
+window.Show();
+
+// 3. 也可以把 Widget 交给 OBS 的停靠面板：obs_frontend_add_dock_by_id(...)。
+//    Widget 归浏览器所有，不要自己 delete；Dispose 时会一起销毁。
 nint widget = browser.Widget;
 
 browser.PostMessage("""{"hello":"page"}""");
 ```
+
+文件选择对话框也是薄绑定，托管侧暴露的是**异步**方法（都返回
+`Task<FilePickerResult>`），调用线程不会被阻塞；原生侧用 `QFileDialog::open()`
+把窗口 show 出来后立即返回，用户选完 / 取消时再回调：
+
+```csharp
+using OBSharp.Interop.Browser;
+
+// 打开（单选）。取消不是错误，看 result.Canceled。
+FilePickerResult input = await FilePicker.OpenFileAsync(new FilePickerOptions
+{
+    Title = "选择配置",
+    Directory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+    Filters = ["JSON|*.json", "所有文件|*"],
+});
+if (!input.Canceled)
+    Console.WriteLine(input.Path);          // 第一个选中的路径
+
+// 打开（多选）。Paths 里可能有多个。
+FilePickerResult inputs = await FilePicker.OpenFilesAsync(new FilePickerOptions
+{
+    Filters = ["图片|*.png,*.jpg,*.jpeg", "所有文件|*"],
+});
+foreach (string path in inputs.Paths)
+    Console.WriteLine(path);
+
+// 保存：DefaultSuffix 不带点；重名时由 Qt 询问是否覆盖。
+FilePickerResult output = await FilePicker.SaveFileAsync(new FilePickerOptions
+{
+    Title = "导出配置",
+    FileName = "config.json",
+    DefaultSuffix = "json",
+    Filters = ["JSON|*.json"],
+});
+
+// 选择文件夹。
+FilePickerResult folder = await FilePicker.SelectFolderAsync();
+
+// 父窗口（可选）：把对话框挂到浏览器 / 工具窗口上，不传就用当前活动窗口。
+FilePickerResult other = await FilePicker.OpenFileAsync(new FilePickerOptions { ParentWidget = browser.Widget });
+```
+
+`FilePickerResult` 里：
+
+* `Canceled`：用户取消（或对话框被外部销毁）时为 `true`；
+* `Path`：第一个选中的路径，没有选中时是 `null`；
+* `Paths`：所有选中的路径，取消时是空数组。
+
+`Filters` 每项写成 `"显示名|模式,模式"`，托管侧会拼成 Qt 需要的
+`"显示名 (模式 模式);;..."`。线程不用自己管：启动对话框时经
+`Internal.InvokeUI` 切到 Qt 主线程，窗口用 `open()` 显示后立即返回；用户交互和
+完成回调都在 Qt 主线程的事件循环里，不会阻塞调用方。**不要在 UI 线程上对返回的
+Task 调 `.Result` / `.Wait()`**，用 `await`。
 
 ## C ABI 命名
 
 * **模块级**（库自己的初始化 / 版本 / 线程辅助）：前缀就是库名，`obsharp_browser_native_*`，
   宏 `OBSHARP_BROWSER_NATIVE_{API,CALL,BUILD,ABI_VERSION}`。
 * **对象级**（一个浏览器实例上的操作）：`obsharp_browser_*`，句柄类型 `obsharp_browser`。
+* **对话框**：`obsharp_file_picker_*`，结果句柄 `obsharp_file_picker_result`（用
+  `obsharp_file_picker_result_cancelled/_count/_path/_destroy` 读取和释放）。
 * 返回码、枚举走短名字（`OBSHARP_ERR_*` / `obsharp_result`），不挂前缀。
 
 ## 线程规则
@@ -352,8 +423,14 @@ browser.PostMessage("""{"hello":"page"}""");
   不是同一个），原生侧会用 `QMetaObject::invokeMethod(..., Qt::QueuedConnection)`
   切回 Qt 线程再派发。
 * `obsharp_browser_destroy()` 会自动切到 Qt 线程（同步 `BlockingQueuedConnection`）后再
-  销毁，避免泄漏；托管 `CefBrowser` 的终结器在 `Environment.HasShutdownStarted`
+  销毁，避免泄漏；托管 `WebView` 的终结器在 `Environment.HasShutdownStarted`
   时会跳过原生销毁，避免进程退出时把终结器线程卡死。
+* 文件选择对话框（`obsharp_file_picker_*`）的启动函数也必须在 Qt 主线程上调用：
+  `QFileDialog` 是 Qt Widget。原生侧用 `open()` 只负责 show，函数立即返回；用户选完 /
+  取消后 `obsharp_file_picker_done_fn` 在同一个线程上被调用一次。托管 `FilePicker`
+  的 `*Async` 方法会自动切到 Qt 线程，并用 `TaskCompletionSource` 把回调变成
+  `Task<FilePickerResult>`，所以不会阻塞调用方。回调里不要做耗时操作，否则会卡住 Qt
+  事件循环。
 
 ## 已知限制
 
@@ -403,6 +480,15 @@ browser.PostMessage("""{"hello":"page"}""");
 * **macOS 上「能不能被 OBS 加载」没验证**。链接 CEF 用的是 framework 自己的 install name
   （`@rpath/…`），本库并没有自己设 `LC_RPATH`；如果 OBS 进程里已经加载了同一个
   framework，dyld 按 install name 复用应该没问题，但这条路径没在真机上验过。
+* **原生文件对话框的 C ABI 也是异步的**。`obsharp_file_picker_open/_save/_select_folder`
+  只负责启动，结果通过 `obsharp_file_picker_done_fn` 回调返回；启动失败才返回错误码，
+  此时回调不会被调用。取消不是错误：结果里的 `cancelled` 为 1、`count` 为 0。托管侧
+  的 `FilePicker.*Async` 把这些包成 `Task<FilePickerResult>`，取消时
+  `result.Canceled == true`、`result.Paths` 为空数组；失败才抛
+  `OBSharpNativeException`。
+* **`show_hidden` 与 `filter` 在原生对话框上是尽力而为**。Windows / macOS 的 native
+  dialog 由系统控件画，Qt 只能把能映射的选项传过去；隐藏文件过滤在部分平台上可能不生效。
+  要完全一致的行为可以自己改用非原生对话框（本库没有暴露这个开关）。
 
 ## 目录结构
 
@@ -413,6 +499,8 @@ browser.PostMessage("""{"hello":"page"}""");
 | `src/RuntimeHost.{h,cpp}` | 运行时解析 obs-browser 模块、取 `blog` / `obs_*` 符号 |
 | `src/HostApi.{h,cpp}` | 复刻 obs-browser 的面板接口（`QCef` / `QCefWidget` 虚表） |
 | `src/BrowserWidget.{h,cpp}` | `QCefWidget` 子类 + 引导脚本（`$obsharp` 控制通道） |
+| `src/FilePicker.{h,cpp}` | `QFileDialog`：打开文件 / 保存文件 / 选择文件夹（`open()` 异步 C ABI，回调返回结果） |
+| `src/version.rc.in` | Windows 版本资源模板，版本号由 CMake 从 `Directory.Version.cmake` 注入 |
 | `src/SchemeHandler.{h,cpp}` | `<scheme>://<host>/*` → Kestrel（默认 https，不做 TLS） |
 | `src/KestrelClient.{h,cpp}` | 命名管道 / UDS 上的最小 HTTP/1.1 客户端 |
 | `src/Log.{h,cpp}` | 转发到 libobs 的 `blog` |
@@ -421,6 +509,7 @@ browser.PostMessage("""{"hello":"page"}""");
 | `../../src/OBSharp.Interop.Browser/` | 托管绑定（`OBSharpNative` / `CefBrowser` 等） |
 | `../../CMakePresets.json` | 各平台的 CMake 预设（CI 用的就是这些） |
 | `../../Directory.Build.props` | 公共 MSBuild 属性；旁边有 `Directory.Version.props`（CI 生成、不入库）就 import 进来，版本号从这儿进 |
+| `../../Directory.Version.cmake` | 同一份 GitVersion 版本的 CMake 形式（CI 生成、不入库）；本目录 CMakeLists 在 `project()` 前 include |
 | `../../.github/workflows/build.yml` | CI：.NET 构建 → 6 个 RID 的原生矩阵（原生库 + Loader）→ 收集成跨平台 Runtime 包 → 组装插件目录 |
 | `../../scripts/Build-DevSymbolicLink.ps1` | 开发用：在 `out/plugin/<Rid>` 摆出上面那份目录结构（模块目录是真实文件，`bin/any`、`data` 是目录链接，改托管侧 / 数据不用重摆），再往 OBS 的插件目录里放一个目录链接指过来（Windows 用 Junction，Linux / macOS 用符号链接）—— 不用往 ProgramData / 安装目录里拷文件 |
 | `../../cmake/ObSharpDeps.cmake` | 缺 CEF / Qt6 时按 obs-studio 清单下载 |

@@ -12,7 +12,8 @@
  *
  * 设计边界（重要）
  * ----------------
- * 这个库**只做一件事**：把 CEF 包成一个 Qt Widget，外加一个可选的普通顶层窗口容器。
+ * 这个库做三件事：把 CEF 包成一个 Qt Widget、提供一个可选的普通顶层窗口容器，
+ * 以及一组异步的文件选择对话框（打开文件 / 保存文件 / 选择文件夹）。
  * 它**不**碰 OBS 的停靠面板（那是 obs_frontend_add_dock_by_id 的事，由托管侧调）。
  *
  *   * 停靠面板：托管侧拿 obsharp_browser_widget() 的 QWidget*，交给
@@ -29,6 +30,9 @@
  *     obsharp_browser_native_invoke_ui() 切过去。
  *   * obsharp_browser_native_initialize() 幂等，可以在任意线程调用；它会异步等待
  *     obs-browser 把 CEF 初始化完。
+ *   * 文件选择对话框是**异步**的：启动函数只把 QFileDialog show 出来就立即返回，
+ *     用户选完 / 取消后，完成回调会在 Qt 主线程上被调用一次。启动函数本身也要求
+ *     Qt 主线程，托管绑定会自动切过去。
  *
  * 所有权
  * ------
@@ -36,6 +40,8 @@
  *   * 返回的 const char* 归库所有：下一次同类调用、或对象销毁后失效，需要保留
  *     就自己拷一份。
  *   * obsharp_browser / obsharp_window 句柄归调用方所有：用完必须 _destroy()。
+ *   * obsharp_file_picker_result 归回调方所有：即使 count == 0（用户取消）
+ *     也要 obsharp_file_picker_result_destroy()。
  *   * obsharp_browser_widget() 返回的 QWidget* 归浏览器所有，不要自己 delete；
  *     交给 OBS 之前**不要**把它挂到别的父级上。
  *
@@ -64,7 +70,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define OBSHARP_BROWSER_NATIVE_ABI_VERSION 3u
+#define OBSHARP_BROWSER_NATIVE_ABI_VERSION 5u
 
 #if defined(_WIN32)
 #if defined(OBSHARP_BROWSER_NATIVE_BUILD)
@@ -87,6 +93,9 @@ typedef struct obsharp_browser obsharp_browser;
 
 /* 不透明句柄：一个普通顶层窗口容器（可选的便利设施，见下）。 */
 typedef struct obsharp_window obsharp_window;
+
+/* 不透明句柄：一次文件选择的结果（可能包含多个路径）。 */
+typedef struct obsharp_file_picker_result obsharp_file_picker_result;
 
 /* 返回码。0 表示成功，负数是错误。 */
 typedef enum obsharp_result {
@@ -252,12 +261,57 @@ typedef struct obsharp_window_options {
 	obsharp_window_callbacks callbacks;
 } obsharp_window_options;
 
+/*
+ * 文件选择对话框（打开文件 / 保存文件 / 选择文件夹）的参数。
+ *
+ * size 必须填成 sizeof(obsharp_file_picker_options)。
+ * 字符串都是可选的 UTF-8；为 NULL 时用 Qt 的默认行为。三种对话框共用这一份
+ * 参数，不适用的字段会被忽略：
+ *   * 选择文件夹：filename / filter / default_suffix 不生效；
+ *   * 打开文件：default_suffix 不生效；
+ *   * 保存文件：allow_multiple 不生效。
+ */
+typedef struct obsharp_file_picker_options {
+	uint32_t size;
+
+	/* 对话框标题。NULL 时用 Qt 的默认标题（"Open" / "Save" 之类）。 */
+	const char *title;
+	/* 初始目录。NULL 时由 Qt 决定（通常是上次访问的目录 / 当前目录）。 */
+	const char *directory;
+	/* 初始文件名（打开 / 保存）。NULL 表示不预填。 */
+	const char *filename;
+	/*
+	 * 文件过滤器，Qt 的写法："图片 (*.png *.jpg);;所有文件 (*)"。
+	 * 组与组之间用 ";;" 分隔，同一组里多个模式用空格隔开。
+	 * NULL 表示不过滤（显示所有文件）。
+	 */
+	const char *filter;
+	/*
+	 * 保存时自动补的后缀，**不带点**（"txt"、"json"）。NULL / 空串表示不补。
+	 */
+	const char *default_suffix;
+
+	/* 打开文件时允许一次选多个（仅 obsharp_file_picker_open 使用）。 */
+	int32_t allow_multiple;
+	/* 非 0 时显示隐藏文件 / 系统文件。 */
+	int32_t show_hidden;
+
+	/*
+	 * 父窗口，用作对话框的模态父级；为 NULL 时用当前活动窗口。
+	 * 跟 obsharp_browser_options.parent_widget 一样，Windows 上既可以传
+	 * QWidget* 也可以传 HWND（内部先按 HWND 找 QWidget，找不到再当成
+	 * QWidget*）；其它平台直接当成 QWidget*。
+	 */
+	void *parent_widget;
+} obsharp_file_picker_options;
+
 /* ---- 版本与初始化 ------------------------------------------------------- */
 
 /* 编译进库的 ABI 版本；跟头文件里的 OBSHARP_BROWSER_NATIVE_ABI_VERSION 比对。 */
 OBSHARP_BROWSER_NATIVE_API uint32_t OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_native_abi_version(void);
 
-/* 人类可读的版本串，形如 "0.3.0"。静态存储，永远有效。 */
+/* 人类可读的版本串，来自构建时注入的 GitVersion 版本（本地构建为
+ * "0.0.0-local"）。静态存储，永远有效。 */
 OBSHARP_BROWSER_NATIVE_API const char *OBSHARP_BROWSER_NATIVE_CALL obsharp_browser_native_version(void);
 
 /*
@@ -377,6 +431,69 @@ OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL
 obsharp_window_set_title(obsharp_window *window, const char *title);
 OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL
 obsharp_window_set_size(obsharp_window *window, int32_t width, int32_t height);
+
+/* ---- 文件选择对话框（异步，全部要求 Qt 主线程） ------------------------ */
+
+/*
+ * 完成回调。原生侧保证：
+ *   * 只在启动函数返回 OBSHARP_OK 之后调用；
+ *   * 在 Qt 主线程上调用，且每次启动**恰好调用一次**；
+ *   * result 不为 NULL，归回调方所有，必须用
+ *     obsharp_file_picker_result_destroy() 释放（取消时的空结果也要释放）。
+ */
+typedef void(OBSHARP_BROWSER_NATIVE_CALL *obsharp_file_picker_done_fn)(
+	void *user, obsharp_file_picker_result *result);
+
+/*
+ * 三个启动函数都用 QFileDialog::open() 显示窗口模态对话框，函数本身**立即返回**，
+ * 不阻塞调用线程。用户选完或取消后，done(user, result) 会在 Qt 主线程上被调用：
+ *   * 选中：result 里 count >= 1，cancelled == 0；
+ *   * 取消：result 里 count == 0，cancelled == 1 —— 不是错误；
+ *   * 对话框被外部销毁：同样按取消上报（count == 0，cancelled == 1）。
+ *
+ * 返回值只表示有没有启动成功：OBSHARP_OK 表示对话框已经 show 出来、之后一定会
+ * 收到一次回调；其它值是启动失败，done 不会被调用，原因在
+ * obsharp_browser_native_last_error() 里。
+ *
+ * 结果对象里的路径用 obsharp_file_picker_result_path() 读取，用完必须
+ * obsharp_file_picker_result_destroy()。返回的路径都是绝对路径（UTF-8）。
+ * options 可以为 NULL（全部用默认值）；里面的字符串在函数返回前会被复制，
+ * 调用方可以立即释放。
+ *
+ * 启动函数要求 Qt 主线程（QFileDialog 是 Qt Widget），托管绑定会自动切过去。
+ *
+ * 打开文件。options->allow_multiple 非 0 时结果里可能有多个路径。
+ */
+OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL
+obsharp_file_picker_open(const obsharp_file_picker_options *options, obsharp_file_picker_done_fn done, void *user);
+
+/* 保存文件。用户输入的文件名已存在时会由 Qt 询问是否覆盖。 */
+OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL
+obsharp_file_picker_save(const obsharp_file_picker_options *options, obsharp_file_picker_done_fn done, void *user);
+
+/* 选择文件夹。结果里永远只有一个路径。 */
+OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL
+obsharp_file_picker_select_folder(const obsharp_file_picker_options *options, obsharp_file_picker_done_fn done,
+				  void *user);
+
+/* 1 = 用户取消（或对话框被销毁），0 = 选中了至少一个路径。任意线程可调用。 */
+OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL
+obsharp_file_picker_result_cancelled(const obsharp_file_picker_result *result);
+
+/* 结果里的路径数量。result 为 NULL / 无效时返回 0。任意线程可调用。 */
+OBSHARP_BROWSER_NATIVE_API int32_t OBSHARP_BROWSER_NATIVE_CALL
+obsharp_file_picker_result_count(const obsharp_file_picker_result *result);
+
+/*
+ * 取第 index 个路径（从 0 开始）。越界 / result 无效时返回 NULL。
+ * 借用指针：随 result 一起失效。任意线程可调用。
+ */
+OBSHARP_BROWSER_NATIVE_API const char *OBSHARP_BROWSER_NATIVE_CALL
+obsharp_file_picker_result_path(const obsharp_file_picker_result *result, int32_t index);
+
+/* 销毁结果对象。传 NULL 是空操作。任意线程可调用。 */
+OBSHARP_BROWSER_NATIVE_API void OBSHARP_BROWSER_NATIVE_CALL
+obsharp_file_picker_result_destroy(obsharp_file_picker_result *result);
 
 /* ---- 传输辅助 ----------------------------------------------------------- */
 

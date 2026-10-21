@@ -1,4 +1,5 @@
 @page "/"
+@using OBSharp.Interop.Browser
 @rendermode InteractiveServer
 @inject OBSharpPluginManager Manager
 @inject PluginManagerState State
@@ -105,7 +106,7 @@ else
 
 @code {
     private bool _busy;
-    
+
     // 交互式渲染下组件是长活的；状态变化（别的会话改了插件列表）时刷新。
     protected override void OnInitialized() => State.Changed += OnStateChanged;
 
@@ -121,11 +122,16 @@ else
 
     private async Task Add()
     {
-        // TODO: 弹出文件选择器 需要QT添加相关支持
+        var result = await FilePicker.OpenFileAsync(new()
+        {
+            Title = "选择插件文件",
+            Filters = ["插件程序集|*.dll", "所有文件|*"]
+        });
+        if (result.Canceled || result.Path is not { } path || !File.Exists(path))
+            return;
 
         await Run(() =>
         {
-            string path = ""; // TODO: 通过文件选择器获取插件路径
             var added = Manager.Add(path);
             if (added is null)
                 return false;

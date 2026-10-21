@@ -492,5 +492,6 @@ src/OBSharp.Interop/Generated/*
 # cmake/ObSharpDeps.cmake 下载的 CEF / Qt6 预编译包
 /lib/deps/
 
-# CI 里由 GitVersion 生成，本地没有它就用 SDK 的默认版本号
+# CI 里由 GitVersion 生成，本地没有它就用 SDK / native 的默认版本号
 /Directory.Version.props
+/Directory.Version.cmake

@@ -44,7 +44,13 @@ struct obsharp_browser {
 
 namespace {
 
-constexpr const char *kVersionString = "0.3.0";
+// 版本串由构建系统注入（CMake 读仓库根的 Directory.Version.cmake，CI 用 GitVersion
+// 生成）。源码里不写死版本；单独用 IDE 打开时退回占位串。
+#ifndef OBSHARP_BROWSER_NATIVE_VERSION
+#define OBSHARP_BROWSER_NATIVE_VERSION "0.0.0-local"
+#endif
+
+constexpr const char *kVersionString = OBSHARP_BROWSER_NATIVE_VERSION;
 
 // 等 obs-browser 把 CEF 初始化完的上限。CEF 冷启动一般 1~3 秒。
 constexpr int kCefReadyTimeoutMs = 15000;
