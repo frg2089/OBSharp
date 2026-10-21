@@ -170,7 +170,7 @@ cmake --build out/build/win-x64 --config Debug --target OBSharp.Interop.Native
 本身不带编译规则，只把 Build / Clean / Rebuild 转成对 CMake 的调用。
 
 整条发布链路（原生库 → 托管 publish → 摆插件目录）走
-[`scripts/Build-Dist.ps1`](../../scripts/Build-Dist.ps1)。
+[`scripts/Build-DevDist.ps1`](../../scripts/Build-DevDist.ps1)。
 
 ## 源码
 

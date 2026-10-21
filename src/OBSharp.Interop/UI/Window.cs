@@ -120,7 +120,7 @@ public partial class Window : IDisposable
             }
             catch (OBSharpNativeException exception)
             {
-                Logger.LogWarning(exception, "Failed to read the window visibility: {Message}", exception.Message);
+                LogReadVisibilityFailed(Logger, exception);
                 return false;
             }
 
@@ -202,11 +202,14 @@ public partial class Window : IDisposable
                     NativeMethods.obsharp_widget_show(created);
 
                 // 标题里的 (none) 约定沿用旧日志：排查「窗口标题不对」时一眼能看出是没给还是给错。
-                NativeLogSink.Write(
-                    NativeLogLevel.Info,
-                    "plain window created: title=" + (options.Title ?? "") +
-                    ", topmost=" + (options.Topmost ? "1" : "0") +
-                    ", resizable=" + (options.Resizable ? "1" : "0"));
+                LogWindowCreated(
+                    Logger,
+                    options.Title ?? "(none)",
+                    width,
+                    height,
+                    options.Topmost,
+                    options.Resizable,
+                    options.Visible);
             });
         }
         catch
@@ -300,7 +303,7 @@ public partial class Window : IDisposable
         }
         catch (OBSharpNativeException exception)
         {
-            Logger.LogError(exception, "Window operation failed: {Message}", exception.Message);
+            LogWindowOperationFailed(Logger, exception, exception.Result);
             return (int)exception.Result;
         }
     }
@@ -327,6 +330,20 @@ public partial class Window : IDisposable
 
     [LoggerMessage(LogLevel.Error, "An exception occurred in the window callback.")]
     private static partial void LogException(ILogger logger, Exception ex);
+
+    [LoggerMessage(LogLevel.Warning, "Failed to read the window visibility")]
+    private static partial void LogReadVisibilityFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(LogLevel.Information,
+        "Window created: title={Title} size={Width}x{Height} topmost={Topmost} resizable={Resizable} visible={Visible}")]
+    private static partial void LogWindowCreated(
+        ILogger logger, string title, int width, int height, bool topmost, bool resizable, bool visible);
+
+    [LoggerMessage(LogLevel.Error, "Window operation failed with {Result}")]
+    private static partial void LogWindowOperationFailed(ILogger logger, Exception exception, OBSharpResult result);
+
+    [LoggerMessage(LogLevel.Warning, "Failed to destroy the window (Qt may already have shut down)")]
+    private static partial void LogDestroyFailed(ILogger logger, Exception exception);
 
     protected virtual void Dispose(bool disposing)
     {
@@ -365,7 +382,7 @@ public partial class Window : IDisposable
         {
             // 析构路径不能抛（finalizer 线程抛异常会直接终止进程），也不该因为
             // 「Qt 已经没了」让调用方的 Dispose 失败。记一笔就够了。
-            Logger.LogWarning(exception, "Failed to destroy the window (Qt may already have shut down): {Message}", exception.Message);
+            LogDestroyFailed(Logger, exception);
         }
 
         _content = 0;

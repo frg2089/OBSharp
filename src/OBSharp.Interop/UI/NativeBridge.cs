@@ -71,11 +71,20 @@ internal static partial class NativeBridge
     /// </remarks>
     public static void Initialize(string? logTag = null)
     {
+        if (!string.IsNullOrEmpty(logTag))
+        {
+            // 旧版的 logTag 用来给原生日志加前缀。新原生库没有这个概念（日志直接进 OBS 日志），
+            // 所以把标签本身打一行当作标记 —— 比静默忽略这个参数好，调用方还能靠它定位。
+            NativeLogSink.WriteInformation("log tag: " + logTag);
+        }
+
         InvokeUI(() =>
         {
             // 解析面板接口。必须在 Qt 主线程上做：obs_browser_create_qcef() 会建一个
             // QCef（C++ 对象，内部有 QObject / 线程亲和性），旧原生库也是在主线程上
             // 解析的（obsharp_browser_create 先要求 UI 线程，再调 initialize）。
+            NativeLogSink.WriteDebug("Resolving the obs-browser panel interface");
+
             QcefPanel? panel = QcefPanel.Load(out string? loadError);
             if (panel is null)
             {
@@ -87,10 +96,12 @@ internal static partial class NativeBridge
                     (loadError is null ? "" : " " + loadError));
             }
 
-            // 一行版本 + ABI，跟旧原生库的 obsharp_browser_native_initialize() 打的那行等价。
+            // 一行版本号，跟旧原生库的 obsharp_browser_native_initialize() 打的那行等价。
             // 排查「改了原生库却没生效」时这是第一条要看的：部署目录里可能同时存在两份
             // OBSharp.Interop.Native，加载的不是刚编出来那份时，代码怎么改都不会有效果。
-            NativeLogSink.Write(NativeLogLevel.Info, $"native library v{Version}");
+            NativeLogSink.WriteInformation("native library v" + Version);
+
+            NativeLogSink.WriteDebug("Calling QCef::init_browser()");
 
             if (!NativeMethods.obsharp_qcef_init_browser(panel.Cef))
             {
@@ -98,14 +109,9 @@ internal static partial class NativeBridge
                     OBSharpResult.BrowserUnavailable,
                     "obsharp_qcef_init_browser() failed: obs-browser could not initialize CEF.");
             }
-        });
 
-        if (!string.IsNullOrEmpty(logTag))
-        {
-            // 旧版的 logTag 用来给原生日志加前缀。新原生库没有这个概念（日志直接进 OBS 日志），
-            // 所以把标签本身打一行当作标记 —— 比静默忽略这个参数好，调用方还能靠它定位。
-            NativeLogSink.Write(NativeLogLevel.Info, "log tag: " + logTag);
-        }
+            NativeLogSink.WriteDebug("CEF initialization requested");
+        });
     }
 
     /// <summary>

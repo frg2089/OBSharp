@@ -154,7 +154,7 @@ SSE 在命名管道上是**真流式**的（实测 `data:` 分批到达，不是
   appsettings.json
 ```
 
-`scripts/Build-Dist.ps1` 已经按 publish 形态摆好，直接用它就不用操心这件事。
+`scripts/Build-DevDist.ps1` 已经按 publish 形态摆好，直接用它就不用操心这件事。
 
 ## 构建
 
@@ -165,7 +165,7 @@ dotnet publish src/OBSharp.PluginManager -c Release -o <out>
 ```
 
 本工程把 TFM 写死成 `net10.0`（插件管理器的 Blazor 依赖那边最稳），跟宿主的 `net10.0/net11.0`
-多目标不联动；`Build-Dist.ps1` 里也按 publish 目录名认它，不再抄一遍 TFM。
+多目标不联动；`Build-DevDist.ps1` 里也按 publish 目录名认它，不再抄一遍 TFM。
 
 ## 目录
 

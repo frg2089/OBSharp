@@ -3,6 +3,8 @@ using System.Runtime.InteropServices;
 
 using OBSharp.Interop.Native;
 
+using Microsoft.Extensions.Logging;
+
 namespace OBSharp.Interop.UI;
 
 /// <summary>
@@ -55,7 +57,13 @@ public static unsafe partial class FilePicker
     /// <see langword="true"/>。
     /// </summary>
     public static Task<FilePickerResult> OpenFileAsync(FilePickerOptions? options = null)
-        => ShowAsync(PickerKind.Open, options, false);
+        => ShowAsync(PickerKind.Open, options, false, null);
+
+    /// <summary>
+    /// 打开文件，并把过程写进 <paramref name="logger"/>。
+    /// </summary>
+    public static Task<FilePickerResult> OpenFileAsync(FilePickerOptions? options, ILogger logger)
+        => ShowAsync(PickerKind.Open, options, false, logger);
 
     /// <summary>
     /// 打开多个文件。取消时 <see cref="FilePickerResult.Canceled"/> 为
@@ -63,7 +71,13 @@ public static unsafe partial class FilePicker
     /// <see cref="FilePickerResult.Paths"/> 中。
     /// </summary>
     public static Task<FilePickerResult> OpenFilesAsync(FilePickerOptions? options = null)
-        => ShowAsync(PickerKind.Open, options, true);
+        => ShowAsync(PickerKind.Open, options, true, null);
+
+    /// <summary>
+    /// 打开多个文件，并把过程写进 <paramref name="logger"/>。
+    /// </summary>
+    public static Task<FilePickerResult> OpenFilesAsync(FilePickerOptions? options, ILogger logger)
+        => ShowAsync(PickerKind.Open, options, true, logger);
 
     /// <summary>
     /// 保存文件。取消时 <see cref="FilePickerResult.Canceled"/> 为
@@ -73,21 +87,36 @@ public static unsafe partial class FilePicker
     /// 用户输入的文件名已经存在时，Qt 会自己询问是否覆盖。
     /// </remarks>
     public static Task<FilePickerResult> SaveFileAsync(FilePickerOptions? options = null)
-        => ShowAsync(PickerKind.Save, options, false);
+        => ShowAsync(PickerKind.Save, options, false, null);
+
+    /// <summary>
+    /// 保存文件，并把过程写进 <paramref name="logger"/>。
+    /// </summary>
+    public static Task<FilePickerResult> SaveFileAsync(FilePickerOptions? options, ILogger logger)
+        => ShowAsync(PickerKind.Save, options, false, logger);
 
     /// <summary>
     /// 选择文件夹。取消时 <see cref="FilePickerResult.Canceled"/> 为
     /// <see langword="true"/>。
     /// </summary>
     public static Task<FilePickerResult> SelectFolderAsync(FilePickerOptions? options = null)
-        => ShowAsync(PickerKind.Folder, options, false);
+        => ShowAsync(PickerKind.Folder, options, false, null);
 
-    private static Task<FilePickerResult> ShowAsync(PickerKind kind, FilePickerOptions? options, bool allowMultiple)
+    /// <summary>
+    /// 选择文件夹，并把过程写进 <paramref name="logger"/>。
+    /// </summary>
+    public static Task<FilePickerResult> SelectFolderAsync(FilePickerOptions? options, ILogger logger)
+        => ShowAsync(PickerKind.Folder, options, false, logger);
+
+    private static Task<FilePickerResult> ShowAsync(
+        PickerKind kind, FilePickerOptions? options, bool allowMultiple, ILogger? logger)
     {
         PickerState state = new();
 
         try
         {
+            if (logger is not null)
+                LogPickerStarting(logger, kind.ToString(), allowMultiple);
             // 整段「建对话框 → 摆参数 → open」都在 Qt 主线程上做：QFileDialog 是 Qt Widget，
             // 连构造都必须在主线程。NativeBridge.InvokeUI 是同步的，异常会搬回调用线程重抛。
             NativeBridge.InvokeUI(() =>
@@ -122,6 +151,9 @@ public static unsafe partial class FilePicker
                     // open() 成功之后对话框的所有权转到原生侧，它会 deleteLater 掉，
                     // 这边不能再碰 dialog（包括下面 catch 里的清理）。
                     started = true;
+
+                    if (logger is not null)
+                        LogPickerOpened(logger, kind.ToString());
                 }
                 catch (Exception exception)
                 {
@@ -136,6 +168,9 @@ public static unsafe partial class FilePicker
                     // 回调不会来了（或者回调已经会来但 Task 已经 faulted）：直接结束 Task。
                     // 用 TrySetException 而不是 SetException：started=true 的分支里回调可能
                     // 已经在 Qt 主线程上完成了它，硬 Set 会抛。
+                    if (logger is not null)
+                        LogPickerFailed(logger, kind.ToString(), exception);
+
                     state.Completion.TrySetException(NativeErrors.TranslateIfNeeded(exception));
 
                     if (!started)
@@ -354,6 +389,15 @@ public static unsafe partial class FilePicker
     /// 完成回调跑在 Qt 主线程上，如果它同步执行 <c>await</c> 之后的续体，调用方的代码就会
     /// 在 Qt 的事件派发栈里跑起来 —— 那里拿到的异常没人接，而且容易在派发过程中做重入操作。
     /// </remarks>
+    [LoggerMessage(LogLevel.Debug, "Opening the {Kind} file dialog (allowMultiple={AllowMultiple})")]
+    private static partial void LogPickerStarting(ILogger logger, string kind, bool allowMultiple);
+
+    [LoggerMessage(LogLevel.Debug, "The {Kind} file dialog was shown")]
+    private static partial void LogPickerOpened(ILogger logger, string kind);
+
+    [LoggerMessage(LogLevel.Error, "The {Kind} file dialog failed to start")]
+    private static partial void LogPickerFailed(ILogger logger, string kind, Exception exception);
+
     private sealed class PickerState
     {
         public TaskCompletionSource<FilePickerResult> Completion { get; } =

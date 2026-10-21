@@ -199,6 +199,14 @@ public partial class WebView : IDisposable
         _config = config;
         _currentUrl = config.Url;
 
+        LogConfigResolved(
+            _logger,
+            config.Url,
+            config.Scheme,
+            config.Domain,
+            config.Host.Length == 0 ? "(none)" : config.Host,
+            config.HasEndpoint && config.Endpoint is not null ? config.Endpoint.Address : "(none)");
+
         // 2) 初始化 CEF（解析 obs-browser 面板 + init_browser）。
         //
         // 旧版是 obsharp_browser_create() 内部顺带做的；现在显式一步。失败抛
@@ -220,6 +228,8 @@ public partial class WebView : IDisposable
         // 而且没有任何错误日志（请求根本没到我们这里）。
         if (config.HasEndpoint && config.Endpoint is not null)
         {
+            LogRegisteringSchemeHandler(_logger, config.Scheme, config.Domain);
+
             if (!SchemeHandlerBridge.EnsureInstalled(
                     config.Scheme, config.Domain, config.Endpoint, out string? schemeError))
             {
@@ -262,6 +272,8 @@ public partial class WebView : IDisposable
                 // （WaitForCefReady，15 秒上限）；这一步不能省：init_browser() 只是
                 // 「开始初始化」，CEF 冷启动通常要 1~3 秒，没就绪就 create_widget
                 // 拿到的是空指针。
+                LogWaitingForCef(_logger);
+
                 bool ready = NativeMethods.obsharp_qcef_wait_for_init(panel.Cef);
                 if (!ready)
                 {
@@ -312,15 +324,7 @@ public partial class WebView : IDisposable
 
                 // 排查「页面停在 about:blank」时最先要看的一条：它直接给出交给 CEF 的 URL
                 // 和 scheme / domain / host 的组合。
-                NativeLogSink.Write(
-                    NativeLogLevel.Info,
-                    "browser widget created: url=" + config.Url +
-                    " scheme=" + config.Scheme +
-                    " domain=" + config.Domain +
-                    " host=" + (config.Host.Length == 0 ? "(none)" : config.Host) +
-                    " endpoint=" + (config.HasEndpoint && config.Endpoint is not null
-                        ? config.Endpoint.Address
-                        : "(none)"));
+                LogWidgetCreated(_logger, config.Url);
             });
         }
         catch
@@ -333,12 +337,12 @@ public partial class WebView : IDisposable
             {
                 try
                 {
-                    ReleaseWidget(widget, guard);
+                    ReleaseWidget(widget, guard, _logger);
                 }
                 catch (Exception cleanupError) when (cleanupError is NativeException or OBSharpNativeException)
                 {
                     // 收尾失败不该盖住真正的构造失败原因。
-                    _logger.LogDebug(cleanupError, "Cleanup after a failed construction also failed.");
+                    LogCleanupFailed(_logger, cleanupError);
                 }
             }
 
@@ -588,7 +592,7 @@ public partial class WebView : IDisposable
             {
                 // Qt 已经退出时投递会失败。消息丢了就丢了（进程正在收尾），
                 // 但绝不能让异常穿过 CEF 的回调栈 —— 那是未定义行为。
-                _logger.LogDebug(exception, "Could not marshal a page message to the Qt main thread; the message was dropped.");
+                LogPageMessageDropped(_logger, exception);
             }
         }
     }
@@ -598,7 +602,7 @@ public partial class WebView : IDisposable
     /// </summary>
     private int Fail(OBSharpResult code, string message)
     {
-        _logger.LogError("{Message}", message);
+        LogOperationFailed(_logger, message);
         return (int)code;
     }
 
@@ -624,23 +628,36 @@ public partial class WebView : IDisposable
     /// <remarks>
     /// 日志映射沿用旧版：<c>0=Verbose → Debug</c>、<c>1=Info → Information</c>、
     /// <c>2=Warning → Warning</c>、<c>3=Error → Error</c>、<c>4=Fatal → Critical</c>。
-    /// 先判 <c>IsEnabled</c> 再拼字符串：页面 console 可能非常密，不判会一直白拼。
+    /// 每个等级各有一个 <see cref="LoggerMessageAttribute"/> 重载：源生成器要求等级写死在
+    /// 属性上，所以不能像 <c>logger.Log</c> 那样把 <see cref="LogLevel"/> 当参数传。
     /// </remarks>
     private void RaiseConsoleMessage(ConsoleMessageInfo info)
     {
         var level = (OBSharpConsoleLevel)info.Level;
-        LogLevel logLevel = level switch
-        {
-            OBSharpConsoleLevel.Verbose => LogLevel.Debug,
-            OBSharpConsoleLevel.Info => LogLevel.Information,
-            OBSharpConsoleLevel.Warning => LogLevel.Warning,
-            OBSharpConsoleLevel.Error => LogLevel.Error,
-            OBSharpConsoleLevel.Fatal => LogLevel.Critical,
-            _ => LogLevel.None,
-        };
 
-        if (logLevel is not LogLevel.None && _logger.IsEnabled(logLevel))
-            _logger.Log(logLevel, "{Level}: {Message} (Source: {Source}, Line: {Line})", level, info.Message, info.Source, info.Line);
+        switch (level)
+        {
+            case OBSharpConsoleLevel.Verbose:
+                LogPageConsoleDebug(_logger, level, info.Message, info.Source, info.Line);
+                break;
+
+            case OBSharpConsoleLevel.Warning:
+                LogPageConsoleWarning(_logger, level, info.Message, info.Source, info.Line);
+                break;
+
+            case OBSharpConsoleLevel.Error:
+                LogPageConsoleError(_logger, level, info.Message, info.Source, info.Line);
+                break;
+
+            case OBSharpConsoleLevel.Fatal:
+                LogPageConsoleCritical(_logger, level, info.Message, info.Source, info.Line);
+                break;
+
+            case OBSharpConsoleLevel.Info:
+            default:
+                LogPageConsoleInformation(_logger, level, info.Message, info.Source, info.Line);
+                break;
+        }
 
         RaiseSafely(() => ConsoleMessage?.Invoke(this, new ConsoleMessageEventArgs(level, info.Message, info.Source, info.Line)));
     }
@@ -740,14 +757,13 @@ public partial class WebView : IDisposable
         // 需要 --verbose）。
         if (eventType is QtEventType.ObsDockClose or QtEventType.Close)
         {
-            _ = browser; // 只为确认句柄还有效；事件本身直接吃掉，不需要额外状态。
-            NativeLogSink.Write(NativeLogLevel.Debug, "blocked a close event on the browser widget (type=" + eventType + ")");
+            LogBlockedCloseEvent(browser._logger, eventType);
             return 1; // 吞掉：C 侧 bool 是 1 字节，所以用 byte 而不是 bool
         }
 
         if (eventType is QtEventType.Show)
         {
-            NativeLogSink.Write(NativeLogLevel.Debug, "browser widget shown; nudging CEF to repaint");
+            LogNudgingRepaint(browser._logger);
             NudgeRepaint(widget);
         }
 
@@ -805,7 +821,7 @@ public partial class WebView : IDisposable
         }
         catch (OBSharpNativeException exception)
         {
-            _logger.LogError(exception, "Browser operation failed: {Message}", exception.Message);
+            LogBrowserOperationFailed(_logger, exception, exception.Result);
             return (int)exception.Result;
         }
     }
@@ -831,7 +847,7 @@ public partial class WebView : IDisposable
     /// 把引用丢掉，剩下的交给它的父级。
     /// </para>
     /// </remarks>
-    private static void ReleaseWidget(nint widget, nint guard)
+    private static void ReleaseWidget(nint widget, nint guard, ILogger logger)
     {
         NativeApi.InvokeUI(() =>
         {
@@ -857,15 +873,87 @@ public partial class WebView : IDisposable
             {
                 // 已经有父级：所有权在别人手里（OBS 的 QDockWidget），只把引用丢掉。
                 // 这里删了就是二次释放 —— 旧 BrowserWidget 析构里同一个判据。
-                NativeLogSink.Write(
-                    NativeLogLevel.Debug,
-                    "browser widget is owned elsewhere (adopted by OBS's dock); leaving it to its parent");
+                LogWidgetOwnedElsewhere(logger);
             }
         });
     }
 
     [LoggerMessage(LogLevel.Error, "An exception occurred in the browser callback.")]
     private static partial void LogException(ILogger logger, Exception ex);
+
+    [LoggerMessage(LogLevel.Information,
+        "Browser options resolved: url={Url} scheme={Scheme} domain={Domain} host={Host} endpoint={Endpoint}")]
+    private static partial void LogConfigResolved(
+        ILogger logger, string url, string scheme, string domain, string host, string endpoint);
+
+    [LoggerMessage(LogLevel.Debug, "Registering the scheme handler for {Scheme}://{Domain}")]
+    private static partial void LogRegisteringSchemeHandler(ILogger logger, string scheme, string domain);
+
+    [LoggerMessage(LogLevel.Debug, "Waiting for obs-browser to finish initializing CEF")]
+    private static partial void LogWaitingForCef(ILogger logger);
+
+    [LoggerMessage(LogLevel.Information, "Browser widget created for {Url}")]
+    private static partial void LogWidgetCreated(ILogger logger, string url);
+
+    [LoggerMessage(LogLevel.Debug, "Cleanup after a failed WebView construction also failed")]
+    private static partial void LogCleanupFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(LogLevel.Debug,
+        "Could not marshal a page message to the Qt main thread; the message was dropped")]
+    private static partial void LogPageMessageDropped(ILogger logger, Exception exception);
+
+    [LoggerMessage(LogLevel.Error, "Browser operation failed: {Message}")]
+    private static partial void LogOperationFailed(ILogger logger, string message);
+
+    /// <summary>
+    /// Logs one <c>console.*</c> message from the page.
+    /// </summary>
+    /// <remarks>
+    /// Takes no <see cref="LogLevel"/> parameter: the level is already decided by the caller,
+    /// and the source generator emits one overload per level instead. Callers pick the right
+    /// one from the page-side severity (see <see cref="RaiseConsoleMessage"/>).
+    /// </remarks>
+
+    [LoggerMessage(EventId = 1001, Level = LogLevel.Debug,
+        Message = "Page console {ConsoleLevel}: {Message} (source={Source}, line={Line})")]
+    private static partial void LogPageConsoleDebug(
+        ILogger logger, OBSharpConsoleLevel consoleLevel, string message, string source, int line);
+
+    [LoggerMessage(EventId = 1002, Level = LogLevel.Information,
+        Message = "Page console {ConsoleLevel}: {Message} (source={Source}, line={Line})")]
+    private static partial void LogPageConsoleInformation(
+        ILogger logger, OBSharpConsoleLevel consoleLevel, string message, string source, int line);
+
+    [LoggerMessage(EventId = 1003, Level = LogLevel.Warning,
+        Message = "Page console {ConsoleLevel}: {Message} (source={Source}, line={Line})")]
+    private static partial void LogPageConsoleWarning(
+        ILogger logger, OBSharpConsoleLevel consoleLevel, string message, string source, int line);
+
+    [LoggerMessage(EventId = 1004, Level = LogLevel.Error,
+        Message = "Page console {ConsoleLevel}: {Message} (source={Source}, line={Line})")]
+    private static partial void LogPageConsoleError(
+        ILogger logger, OBSharpConsoleLevel consoleLevel, string message, string source, int line);
+
+    [LoggerMessage(EventId = 1005, Level = LogLevel.Critical,
+        Message = "Page console {ConsoleLevel}: {Message} (source={Source}, line={Line})")]
+    private static partial void LogPageConsoleCritical(
+        ILogger logger, OBSharpConsoleLevel consoleLevel, string message, string source, int line);
+
+    [LoggerMessage(LogLevel.Debug, "Blocked a close event on the browser widget (type={EventType})")]
+    private static partial void LogBlockedCloseEvent(ILogger logger, int eventType);
+
+    [LoggerMessage(LogLevel.Debug, "Browser widget shown; nudging CEF to repaint")]
+    private static partial void LogNudgingRepaint(ILogger logger);
+
+    [LoggerMessage(LogLevel.Error, "Browser operation failed with {Result}")]
+    private static partial void LogBrowserOperationFailed(ILogger logger, Exception exception, OBSharpResult result);
+
+    [LoggerMessage(LogLevel.Debug,
+        "Browser widget is owned elsewhere (adopted by OBS's dock); leaving it to its parent")]
+    private static partial void LogWidgetOwnedElsewhere(ILogger logger);
+
+    [LoggerMessage(LogLevel.Warning, "Failed to destroy the browser widget (Qt may already have shut down)")]
+    private static partial void LogDestroyFailed(ILogger logger, Exception exception);
 
     protected virtual void Dispose(bool disposing)
     {
@@ -893,13 +981,13 @@ public partial class WebView : IDisposable
         try
         {
             // 顺序：断回调 + 撤过滤器 + closeBrowser + hide + （按所有权）deleteLater。
-            ReleaseWidget(widget, guard);
+            ReleaseWidget(widget, guard, _logger);
         }
         catch (Exception exception)
         {
             // 析构路径不能抛：finalizer 线程上抛异常会直接终止进程。
             // Qt 已经退出时（进程收尾阶段）这里很容易失败，记一笔就够了。
-            _logger.LogWarning(exception, "Failed to destroy the browser widget (Qt may already have shut down): {Message}", exception.Message);
+            LogDestroyFailed(_logger, exception);
         }
 
         // 回调已经断开、过滤器已经撤掉，现在释放上下文句柄是安全的。

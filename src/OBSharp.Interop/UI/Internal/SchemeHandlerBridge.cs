@@ -147,6 +147,9 @@ internal static unsafe class SchemeHandlerBridge
                 return true;
             }
 
+            SafeLog(NativeLogLevel.Debug, "registering the scheme handler for " + key +
+                " (endpoint " + endpoint.Address + ")");
+
             int result = NativeMethods.obsharp_scheme_register(scheme, domain, in Callbacks);
             if (result != (int)NativeResult.Ok)
             {

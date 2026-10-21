@@ -9,20 +9,23 @@ namespace OBSharp.Interop.UI;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The native library never resolves libobs' <c>blog()</c> itself. It calls the function
-/// pointer installed by <see cref="NativeApi.InstallLogSink"/>, which lands here. That keeps
-/// "where do log lines go" in managed code, next to the <see cref="ILoggerFactory"/> and its
-/// filters.
+/// The native library never resolves libobs' <see cref="object.ToString"/>-style logging itself.
+/// It calls the function pointer installed by <see cref="NativeApi.InstallLogSink"/>, which lands
+/// here. That keeps "where do log lines go" in managed code, next to the
+/// <see cref="ILogger"/> and its filters.
 /// </para>
 /// <para>
 /// The sink is process-wide because the native library is. <see cref="Install"/> replaces it.
 /// </para>
+/// <para>
+/// Message text arrives pre-formatted from the native side, so every
+/// <see cref="LoggerMessageAttribute"/> here takes the whole line as a single <c>{Message}</c>
+/// placeholder. Level dispatch is an explicit switch because the native levels mirror libobs'
+/// <see cref="NativeLogLevel"/> constants and do not line up with <see cref="LogLevel"/>.
+/// </para>
 /// </remarks>
-internal static class NativeLogSink
+internal static partial class NativeLogSink
 {
-    /// <summary>Logger category used for lines that do not belong to a specific widget.</summary>
-    private const string CategoryName = "OBSharp.Interop.Native";
-
     /// <summary>Guards <see cref="_logger"/>: the native side logs from any thread.</summary>
     private static readonly object Gate = new();
 
@@ -92,28 +95,56 @@ internal static class NativeLogSink
             return;
         }
 
-        LogLevel mapped = Map(level);
+        switch (level)
+        {
+            case NativeLogLevel.Error:
+                LogNativeError(logger, message);
+                break;
 
-        // Bail out before formatting when the level is filtered away.
-        if (!logger.IsEnabled(mapped))
-            return;
+            case NativeLogLevel.Warning:
+                LogNativeWarning(logger, message);
+                break;
 
-        logger.Log(mapped, "{Message}", message);
+            case NativeLogLevel.Debug:
+                LogNativeDebug(logger, message);
+                break;
+
+            case NativeLogLevel.Info:
+            default:
+                LogNativeInformation(logger, message);
+                break;
+        }
     }
 
-    /// <summary>
-    /// Maps a native severity onto <see cref="LogLevel"/>.
-    /// </summary>
+    /// <summary>Writes an information-level line that originated in managed code.</summary>
     /// <remarks>
-    /// Explicit switch on purpose: the native values mirror libobs' <c>blog()</c> constants and
-    /// do not line up with <see cref="LogLevel"/>'s ordering.
+    /// Used by types that have no <see cref="ILogger"/> of their own (the static bridge and the
+    /// static file picker). Routes through the same sink so every line still lands in one place.
     /// </remarks>
-    private static LogLevel Map(NativeLogLevel level) => level switch
-    {
-        NativeLogLevel.Error => LogLevel.Error,
-        NativeLogLevel.Warning => LogLevel.Warning,
-        NativeLogLevel.Info => LogLevel.Information,
-        NativeLogLevel.Debug => LogLevel.Debug,
-        _ => LogLevel.Information,
-    };
+    internal static void WriteInformation(string message) => Write(NativeLogLevel.Info, message);
+
+    /// <summary>Writes a warning-level line that originated in managed code.</summary>
+    internal static void WriteWarning(string message) => Write(NativeLogLevel.Warning, message);
+
+    /// <summary>Writes a debug-level line that originated in managed code.</summary>
+    internal static void WriteDebug(string message) => Write(NativeLogLevel.Debug, message);
+
+    /// <summary>Writes an error-level line that originated in managed code.</summary>
+    internal static void WriteError(string message) => Write(NativeLogLevel.Error, message);
+
+    /// <summary>Writes one line from the native library at error level.</summary>
+    [LoggerMessage(LogLevel.Error, "Native: {Message}")]
+    private static partial void LogNativeError(ILogger logger, string message);
+
+    /// <summary>Writes one line from the native library at warning level.</summary>
+    [LoggerMessage(LogLevel.Warning, "Native: {Message}")]
+    private static partial void LogNativeWarning(ILogger logger, string message);
+
+    /// <summary>Writes one line from the native library at information level.</summary>
+    [LoggerMessage(LogLevel.Information, "Native: {Message}")]
+    private static partial void LogNativeInformation(ILogger logger, string message);
+
+    /// <summary>Writes one line from the native library at debug level.</summary>
+    [LoggerMessage(LogLevel.Debug, "Native: {Message}")]
+    private static partial void LogNativeDebug(ILogger logger, string message);
 }
