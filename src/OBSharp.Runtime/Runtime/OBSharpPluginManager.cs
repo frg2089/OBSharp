@@ -1,10 +1,12 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace OBSharp.Runtime;
 
 internal sealed partial class OBSharpPluginManager(
     OBSharpPluginRegister register,
+    IOptions<OBSharpHostOptions> options,
     ILogger<OBSharpPluginManager> logger,
     IServiceProvider serviceProvider)
 {
@@ -80,7 +82,7 @@ internal sealed partial class OBSharpPluginManager(
     {
         lock (_lock)
         {
-            if(Plugins.Count is 0)
+            if (Plugins.Count is 0)
             {
                 Plugins.AddRange(register.Plugins
                     .Where(i => i.Value)
@@ -135,6 +137,9 @@ internal sealed partial class OBSharpPluginManager(
         {
             LogLoadStarting(pluginInfo.Path);
 
+            var pluginFolder = Path.GetFullPath(Path.GetDirectoryName(pluginInfo.Path) ?? options.Value.DataPath);
+            LogPluginFolder(pluginFolder);
+
             if (!File.Exists(pluginInfo.Path))
             {
                 // 列表里记着但文件没了（插件被删掉、或者部署不完整）。单独记一条：
@@ -165,8 +170,8 @@ internal sealed partial class OBSharpPluginManager(
 
             LogLoadTypeFound(type.FullName ?? type.Name);
 
-            LogLoadCreatingInstance(type.FullName ?? type.Name);
-            if (ActivatorUtilities.CreateInstance(serviceProvider, type) is not ObsPlugin plugin)
+            LogLoadCreatingInstance(type.FullName ?? type.Name);            
+            if (ActivatorUtilities.CreateInstance(serviceProvider, type, new ObsPluginInfo(pluginFolder)) is not ObsPlugin plugin)
             {
                 LogPluginLoadError(pluginInfo.Path, type);
                 pluginInfo.Status = OBSharpPluginStatus.Failed;
@@ -174,13 +179,14 @@ internal sealed partial class OBSharpPluginManager(
             }
 
             LogLoadCallingLoad(type.FullName ?? type.Name);
+            
             plugin.Load();
-            LogLoadSucceeded(pluginInfo.Path, plugin.Name);
 
             pluginInfo.Name = plugin.Name;
             pluginInfo.Description = plugin.Description;
             pluginInfo.Instance = plugin;
             pluginInfo.Status = OBSharpPluginStatus.Loaded;
+            LogLoadSucceeded(pluginInfo.Path, pluginInfo.Name);
 
             if (CanLoadedAll)
             {
@@ -318,6 +324,9 @@ internal sealed partial class OBSharpPluginManager(
 
     [LoggerMessage(LogLevel.Debug, "Load: calling {PluginType}.Load()")]
     private partial void LogLoadCallingLoad(string pluginType);
+
+    [LoggerMessage(LogLevel.Debug, "Plugin folder set to {Path}")]
+    private partial void LogPluginFolder(string path);
 
     [LoggerMessage(LogLevel.Information, "Plugin loaded: {PluginName} ({PluginPath})")]
     private partial void LogLoadSucceeded(string pluginPath, string? pluginName);

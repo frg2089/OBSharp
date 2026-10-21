@@ -4,13 +4,24 @@ using Microsoft.Extensions.Logging;
 
 namespace OBSharp;
 
+public sealed class ObsPluginInfo
+{
+    public string PluginFolder { get; }
+    internal ObsPluginInfo(string pluginFolder)
+    {
+        PluginFolder = pluginFolder;
+    }
+}
+
 /// <summary>
 /// 插件基类。一个插件程序集里恰好实现一个子类，宿主（OBSharp.Runtime）加载程序集之后
 /// 用无参构造函数构造它，再附加 <see cref="Context"/>，按 <see cref="Load"/>、
 /// <see cref="PostLoad"/>、<see cref="Unload"/> 的顺序调用。
 /// </summary>
-public abstract class ObsPlugin
+public abstract class ObsPlugin(ObsPluginInfo info)
 {
+    public string PluginFolder { get; } = info.PluginFolder;
+
     /// <summary>
     /// 插件名。默认取插件程序集名（不含扩展名），同时用作数据目录名。
     /// </summary>
@@ -51,15 +62,20 @@ public abstract class ObsPlugin
     /// </remarks>
     public virtual void Unload() { }
 
-    protected virtual WebApplicationBuilder CreateBuilder(string? name = null)
+    protected virtual WebApplicationBuilder CreateBuilder(
+        string? name = null,
+        string? contentRootPath = null,
+        string? webRootPath = null)
     {
         name ??= Name;
+        contentRootPath ??= PluginFolder;
+        webRootPath ??= Path.Combine(contentRootPath, "wwwroot");
 
         var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions
         {
             ApplicationName = name,
-            ContentRootPath = AppContext.BaseDirectory,
-            WebRootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot"),
+            ContentRootPath = contentRootPath,
+            WebRootPath = webRootPath,
         });
 
         // 跟 ObsPluginContext.CreateBuilder() 一样：日志落进 OBS 日志，每行带插件标识符。

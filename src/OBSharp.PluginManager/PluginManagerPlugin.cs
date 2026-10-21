@@ -40,7 +40,8 @@ public sealed class PluginManagerPlugin : ObsPlugin
     /// <inheritdoc/>
     public override string? Description => "OB# 插件管理器：启用 / 停用 / 移除 / 添加插件。";
 
-    public PluginManagerPlugin(IServiceProvider serviceProvider)
+    public PluginManagerPlugin(IServiceProvider serviceProvider, ObsPluginInfo info)
+        : base(info)
     {
         _builder = CreateBuilder(HostName);
         _builder.Services.AddSingleton(serviceProvider.GetRequiredService<OBSharpPluginManager>());
