@@ -60,7 +60,7 @@ jobs:
           "</Project>" >> Directory.Version.props
 
           @"
-          # 由 CI 生成，勿入库；native CMake 构建读取本文件（见 src/OBSharp.Interop.Browser.Native/CMakeLists.txt）。
+          # 由 CI 生成，勿入库；native CMake 构建读取本文件（见 src/OBSharp.Interop.Native/CMakeLists.txt）。
           set(OBSHARP_VERSION "${{ steps.gitversion.outputs.semVer }}")
           set(OBSHARP_VERSION_NUMERIC "${{ steps.gitversion.outputs.majorMinorPatch }}")
           set(OBSHARP_VERSION_FILE "${{ steps.gitversion.outputs.assemblySemFileVer }}")
@@ -207,7 +207,7 @@ jobs:
       - name: 上传 Native 库
         uses: actions/upload-artifact@v7
         with:
-          name: OBSharp.Interop.Browser.Native-${{ matrix.rid }}
+          name: OBSharp.Interop.Native-${{ matrix.rid }}
           path: out/native/${{ matrix.outdir }}/Release/
           if-no-files-found: error
 
@@ -234,37 +234,37 @@ jobs:
       - name: 下载 Native 库 (win-x64)
         uses: actions/download-artifact@v8
         with:
-          name: OBSharp.Interop.Browser.Native-win-x64
+          name: OBSharp.Interop.Native-win-x64
           path: out/runtimes/win-x64/native
 
       - name: 下载 Native 库 (win-arm64)
         uses: actions/download-artifact@v8
         with:
-          name: OBSharp.Interop.Browser.Native-win-arm64
+          name: OBSharp.Interop.Native-win-arm64
           path: out/runtimes/win-arm64/native
 
       - name: 下载 Native 库 (linux-x64)
         uses: actions/download-artifact@v8
         with:
-          name: OBSharp.Interop.Browser.Native-linux-x64
+          name: OBSharp.Interop.Native-linux-x64
           path: out/runtimes/linux-x64/native
 
       - name: 下载 Native 库 (linux-arm64)
         uses: actions/download-artifact@v8
         with:
-          name: OBSharp.Interop.Browser.Native-linux-arm64
+          name: OBSharp.Interop.Native-linux-arm64
           path: out/runtimes/linux-arm64/native
 
       - name: 下载 Native 库 (osx-x64)
         uses: actions/download-artifact@v8
         with:
-          name: OBSharp.Interop.Browser.Native-osx-x64
+          name: OBSharp.Interop.Native-osx-x64
           path: out/runtimes/osx-x64/native
 
       - name: 下载 Native 库 (osx-arm64)
         uses: actions/download-artifact@v8
         with:
-          name: OBSharp.Interop.Browser.Native-osx-arm64
+          name: OBSharp.Interop.Native-osx-arm64
           path: out/runtimes/osx-arm64/native
 
       - name: 上传完整程序集

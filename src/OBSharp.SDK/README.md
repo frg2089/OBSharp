@@ -2,7 +2,8 @@
 
 写 OB# 插件要引用的就是这个项目：`ObsPlugin` 基类、宿主给插件的环境信息（`ObsPluginContext`）、
 host / 浏览器 / 窗口（`ObsHost`、`ObsBrowser`、`ObsWindow`），加上传递引用的 `OBSharp.Interop`
-（libobs 的全套绑定）、`OBSharp.Interop.Browser`（浏览器控件的托管绑定，原生库另说）和
+（libobs 的全套绑定）、`OBSharp.Interop.UI`（浏览器控件 / 窗口 / 文件对话框，逻辑全在托管侧；底下只由
+`OBSharp.Interop.Native` 提供一层不含判断的 C ABI 转发）和
 `Microsoft.Extensions.Logging.Abstractions`（`ILogger`，不用另外加包，插件的日志已经接在 OBS 日志上了）。
 
 ## 引用
@@ -22,7 +23,7 @@ host / 浏览器 / 窗口（`ObsHost`、`ObsBrowser`、`ObsWindow`），加上�
 ```
 
 这个 `Import` 把宿主会提供的程序集从插件的输出里去掉：`OBSharp.SDK`、`OBSharp.Interop`、
-`OBSharp.Interop.Browser`、`Microsoft.Extensions.Logging.Abstractions` 和它带的
+`Microsoft.Extensions.Logging.Abstractions` 和它带的
 `Microsoft.Extensions.DependencyInjection.Abstractions`
 （引用包时自动生效，不用写 `Import`）。它们只在编译时有用，运行时宿主自己带着（见「部署」）；
 不拷进 `bin`、不写进插件自己的 `deps.json`，`dotnet publish` 也一样。插件自己的第三方依赖不受影响，
@@ -294,7 +295,8 @@ public sealed class MyPlugin : ObsPlugin
 - 自己 `Dispose()` 也是安全的，多次调用是空操作。
 ### 为什么 CEF 里实际是 `https://<host>.obsharp/`（但并没有加密）
 
-`obsharp://` 不是 Chromium 认识的 scheme，没法直接加载，所以原生库在**创建浏览器时**做一次映射：
+`obsharp://` 不是 Chromium 认识的 scheme，没法直接加载，所以托管侧（`OBSharp.Interop.UI`）
+在**创建浏览器时**做一次映射：
 
 ```
 obsharp://<host>/path?query   →   https://<host>.obsharp/path?query
@@ -317,7 +319,7 @@ factory 返回 `nullptr` 时才会回落到真正的网络传输。我们的 fac
   `window.obsharp.host` 和 `window.obsharp.url = "obsharp://<host>/"`。
 - 页面内导航请用**相对路径**，或者写 `https://<host>.obsharp/...`；**不要**把 `obsharp://...` 写进
   `<a href>` / `location.href`（Chromium 不认识这个 scheme，会当外部协议处理）。
-- 插件 API 里一律用 `obsharp://<host>/...`，映射由原生库统一做。
+- 插件 API 里一律用 `obsharp://<host>/...`，映射由 `OBSharp.Interop.UI` 统一做。
 - 想退回明文来源（不安全上下文），可以在 `BrowserOptions` 里显式设 `Scheme = "http"`。
 - **WebSocket 不通**：`ws` / `wss` 不经过 scheme handler（Chromium 的 WebSocket 走独立 connector，
   会自己做 TLS 握手），所以 `wss://<host>.obsharp/` 连不上。需要双向实时通道时用
@@ -351,7 +353,7 @@ factory 返回 `nullptr` 时才会回落到真正的网络传输。我们的 fac
 `= false` 的行不会加载，但会留在插件列表里，可以在插件管理器面板（`OBSharp.PluginManager` 这个插件）里启用。
 启用或停用之后 OB# 会把列表写回这个文件，所以手写的注释会被覆盖、相对路径会变成绝对路径。
 
-`OBSharp.SDK`、`OBSharp.Interop`、`OBSharp.Interop.Browser` 和 `Microsoft.Extensions.Logging.Abstractions` 由宿主提供（宿主自己那份 `OBSharp.Runtime` 也一样）：插件目录里就算有自己的一份副本也会被忽略（引用 SDK 时 `build/OBSharp.SDK.targets` 已经把它们从输出里去掉，编译时照样能引用）。跨边界的类型（`ObsPlugin`、`ILogger<T>`……）只有一份，插件才认得出来。插件加载在自己的 `AssemblyLoadContext` 里，可以卸载，卸载时宿主会把加载上下文也卸掉。
+`OBSharp.SDK`、`OBSharp.Interop` 和 `Microsoft.Extensions.Logging.Abstractions` 由宿主提供（宿主自己那份 `OBSharp.Runtime` 也一样）：插件目录里就算有自己的一份副本也会被忽略（引用 SDK 时 `build/OBSharp.SDK.targets` 已经把它们从输出里去掉，编译时照样能引用）。跨边界的类型（`ObsPlugin`、`ILogger<T>`……）只有一份，插件才认得出来。插件加载在自己的 `AssemblyLoadContext` 里，可以卸载，卸载时宿主会把加载上下文也卸掉。
 
 > 插件管理 API（`OBSharpPluginManager` 那一套）是 `OBSharp.Runtime` 的 `internal` 成员，只有插件管理器
 > （`OBSharp.PluginManager`，宿主的友元程序集）能用，普通插件拿不到。

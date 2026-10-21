@@ -1,4 +1,4 @@
-﻿root = true
+root = true
 
 # All files
 [*]
@@ -401,12 +401,13 @@ dotnet_style_allow_multiple_blank_lines_experimental = false:silent
 dotnet_style_allow_statement_immediately_after_block_experimental = false:silent
 
 # C / C++ 源码
-# 跟上游 obs-studio / obs-browser 保持一致：制表符缩进、UTF-8（无 BOM）、LF。
-# 注释里有中文，所以 MSVC 需要 /utf-8（见 src/OBSharp.Interop.Browser.Native/CMakeLists.txt）。
+# UTF-8（无 BOM）、LF、2 空格缩进（旧项目跟上游 obs-studio / obs-browser 的制表符风格
+# 已放弃：新原生库只是薄转发层，跟同目录的托管代码保持一致的缩进更好读）。
+# 注释里有中文，所以 MSVC 需要 /utf-8（见 src/OBSharp.Interop.Native/CMakeLists.txt）。
 [*.{c,cc,cpp,cxx,h,hh,hpp,hxx}]
-indent_style = tab
-indent_size = 8
-tab_width = 8
+indent_style = space
+indent_size = 2
+tab_width = 2
 end_of_line = lf
 charset = utf-8
 

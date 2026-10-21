@@ -27,7 +27,7 @@ public override bool Load()
 ```
 
 页面地址是 `https://plugin-manager.obsharp/`——**安全上下文**（`crypto.subtle` 之类的
-API 可用），但没有任何 TLS：请求由原生库的 scheme handler 直接转进命名管道。
+API 可用），但没有任何 TLS：请求由托管侧注册的 scheme handler 直接转进命名管道。
 ## 两个入口：停靠面板 + 工具菜单
 
 同一个页面（同一台 Kestrel、同一个 URL）在两处出现：
@@ -78,7 +78,7 @@ SDK 的 `ObsHost.AddToolsMenuItem` 已经处理好了：回调是 <b>SDK 里的�
 
 ### 为什么必须禁掉 WebSocket
 
-面板的 HTTP 全部从命名管道 / UDS 过，而原生 `KestrelClient` 是「一次请求一次连接、
+面板的 HTTP 全部从命名管道 / UDS 过，而托管侧的 `KestrelClient` 是「一次请求一次连接、
 `Connection: close`」，**接不住 WebSocket 的 `Upgrade`**。如果放任 SignalR 去协商，
 它会优先选 WebSocket 然后连不上，页面一直卡在「正在连接」。
 

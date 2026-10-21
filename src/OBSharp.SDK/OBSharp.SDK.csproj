@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <RootNamespace>OBSharp</RootNamespace>
@@ -20,7 +20,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\OBSharp.Interop\OBSharp.Interop.csproj" />
-    <ProjectReference Include="..\OBSharp.Interop.Browser\OBSharp.Interop.Browser.csproj" />
   </ItemGroup>
 
 </Project>

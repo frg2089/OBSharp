@@ -1,4 +1,4 @@
-# ObSharpDeps.cmake —— 构建 OBSharp.Interop.Browser.Native 之前，把 CEF / Qt6 拉到本地。
+# ObSharpDeps.cmake —— 构建 OBSharp.Interop.Native 之前，把 CEF / Qt6 拉到本地。
 #
 # 不写死版本，直接读 lib/obs-studio 的依赖清单：
 #   * 版本 / 地址 / SHA-256 / 修订号 ← CMakePresets.json 里名为 "dependencies" 的
@@ -66,7 +66,7 @@ else()
   set(_obsharp_arch x64)
 endif()
 
-# 给上层（src/OBSharp.Interop.Browser.Native）用，省得输出目录那边再判一遍架构。
+# 给上层（src/OBSharp.Interop.Native）用，省得输出目录那边再判一遍架构。
 set(OBSHARP_TARGET_ARCH "${_obsharp_arch}")
 
 # 依赖名 → 清单平台键（如 windows-x64）+ 文件名里 ARCH 的取值（macOS 的 qt6 是 universal）。

@@ -16,7 +16,7 @@ Linux / macOS 用符号链接）。
     macOS             OBSharp.plugin/Contents/{MacOS,any,Resources}/…
 
   其中模块目录（bin/64bit 或 Contents/MacOS）是真实文件：OBSharp.Loader 的 publish
-  产出，外加一份原生库 —— 原生库 Loader 那边不带（它不引用 OBSharp.Interop.Browser），
+  产出，外加一份原生库 —— 原生库 Loader 那边不带（它只引用 OBSharp.Interop，不含 UI 那部分），
   得补进去，AOT 出来的模块找不到「自己旁边」的原生库。
 
   bin/any 和 data 是目录链接，分别指向 Runtime 的 publish 目录和源码里的 Data 目录：
@@ -165,16 +165,16 @@ if (-not $Rid) {
   $Rid = "$os-$arch"
 }
 
-# 原生库的目录名是 CMake 那边的架构标签，跟 OBSharp.Interop.Browser.csproj 里的
+# 原生库的目录名是 CMake 那边的架构标签，跟 OBSharp.Interop.csproj 里的
 # OBSharpNativeArch 是同一套（x64 / arm64）。
 $NativeArch = $Rid -like '*-arm64' ? 'arm64' : 'x64'
 
 # 平台决定两件事：OBS 加载的模块叫什么、原生库叫什么。
 $OsName = $Rid -replace '-.*$', ''
 $LoaderName, $NativeName = switch ($OsName) {
-  'win' { 'OBSharp.dll', 'OBSharp.Interop.Browser.Native.dll' }
-  'linux' { 'OBSharp.so', 'libOBSharp.Interop.Browser.Native.so' }
-  'osx' { 'OBSharp.dylib', 'libOBSharp.Interop.Browser.Native.dylib' }
+  'win' { 'OBSharp.dll', 'OBSharp.Interop.Native.dll' }
+  'linux' { 'OBSharp.so', 'libOBSharp.Interop.Native.so' }
+  'osx' { 'OBSharp.dylib', 'libOBSharp.Interop.Native.dylib' }
   default { throw "不认识的 RID：$Rid" }
 }
 

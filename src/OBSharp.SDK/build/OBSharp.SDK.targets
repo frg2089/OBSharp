@@ -1,4 +1,4 @@
-﻿<Project>
+<Project>
 
   <!--
     宿主（OBSharp.Runtime）自己带着这些程序集，插件目录里再放一份没有任何用处：
@@ -20,7 +20,6 @@
     <!-- 宿主会提供的程序集，按文件名（不含扩展名）匹配；宿主以后多带什么，在这里补一行。 -->
     <OBSharpHostAssembly Include="OBSharp.SDK" />
     <OBSharpHostAssembly Include="OBSharp.Interop" />
-    <OBSharpHostAssembly Include="OBSharp.Interop.Browser" />
     <OBSharpHostAssembly Include="Microsoft.Extensions.Logging.Abstractions" />
     <OBSharpHostAssembly Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <!-- 宿主自己那一份：插件管理器用友元程序集（InternalsVisibleTo）访问它的 internal 插件管理

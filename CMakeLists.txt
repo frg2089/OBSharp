@@ -22,4 +22,4 @@ project("OBSharp" LANGUAGES C CXX)
 # 缺 CEF / Qt6 就按 obs-studio 的清单下到 lib/deps（版本随 lib/obs-studio 走）。
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/ObSharpDeps.cmake")
 
-add_subdirectory("src/OBSharp.Interop.Browser.Native")
+add_subdirectory("src/OBSharp.Interop.Native")

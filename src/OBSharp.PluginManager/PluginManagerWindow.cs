@@ -1,4 +1,4 @@
-using OBSharp.Interop.Browser;
+using OBSharp.Interop.UI;
 
 namespace OBSharp.PluginManager;
 

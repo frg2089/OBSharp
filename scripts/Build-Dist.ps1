@@ -9,7 +9,7 @@
 .DESCRIPTION
 CI（.github/workflows/build.yml）那条流水线，本地一把跑完：
 
-  1. 原生库：cmake --preset <Rid>，再编 OBSharp.Interop.Browser.Native
+  1. 原生库：cmake --preset <Rid>，再编 OBSharp.Interop.Native
   2. Interop 绑定生成器：会重写 src/OBSharp.Interop/Generated/（手改过生成代码就别跑，用
      -SkipGenerator）
   3. 托管侧：dotnet restore / build，再 publish Runtime、Loader（NativeAOT）、OBSharp.PluginManager
@@ -112,9 +112,9 @@ $NativeArch = $Rid -like '*-arm64' ? 'arm64' : 'x64'
 # 平台决定模块叫什么、原生库叫什么、摆成什么形状。
 $OsName = $Rid -replace '-.*$', ''
 $LoaderName, $NativeName = switch ($OsName) {
-  'win' { 'OBSharp.dll', 'OBSharp.Interop.Browser.Native.dll' }
-  'linux' { 'OBSharp.so', 'libOBSharp.Interop.Browser.Native.so' }
-  'osx' { 'OBSharp.dylib', 'libOBSharp.Interop.Browser.Native.dylib' }
+  'win' { 'OBSharp.dll', 'OBSharp.Interop.Native.dll' }
+  'linux' { 'OBSharp.so', 'libOBSharp.Interop.Native.so' }
+  'osx' { 'OBSharp.dylib', 'libOBSharp.Interop.Native.dylib' }
   default { throw "不认识的 RID：$Rid" }
 }
 
@@ -179,7 +179,7 @@ try {
 
     # 不用 --build --preset <rid>-<config>：Debug 在有些平台没有对应的构建预设，
     # 直接指 binaryDir + --config 更稳。
-    & $cmakeExe --build $BuildDir --config $Configuration --target OBSharp.Interop.Browser.Native
+    & $cmakeExe --build $BuildDir --config $Configuration --target OBSharp.Interop.Native
     if ($LASTEXITCODE -ne 0) { throw "原生库编译失败（退出码 $LASTEXITCODE）" }
   }
 
@@ -248,7 +248,7 @@ try {
   New-Item -ItemType Directory -Force -Path $moduleOutDir, $anyOutDir, $dataOutDir | Out-Null
 
   # 模块目录：Loader 的 publish + 原生库。原生库不放这儿的话，AOT 出来的模块找不到
-  # 「自己旁边」的那份（Loader 不引用 OBSharp.Interop.Browser，publish 里不带它）。
+  # 「自己旁边」的那份（Loader 只引用 OBSharp.Interop，不含 UI 那部分）。
   Copy-Into $LoaderPublish $moduleOutDir
   Copy-Item -LiteralPath (Join-Path $NativeDir $NativeName) -Destination $moduleOutDir -Force
 

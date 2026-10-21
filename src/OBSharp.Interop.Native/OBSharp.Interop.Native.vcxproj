@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  OBSharp.Interop.Native 的 MSBuild 外壳。
+
+  它自己不带任何编译规则，只是把 Build / Clean / Rebuild 转成对 CMake 的调用，
+  并原样把 $(Configuration) 和 $(Platform) 传下去。
+
+  工具链跟着 IDE 走：VS 2026 → 生成器 "Visual Studio 18 2026" + 工具集 v145（和
+  OBS 32 本体一致），VS 2022 → "Visual Studio 17 2022" + v143；Windows SDK 默认
+  钉在 10.0.26100.0（OBS 自己的预设也是这个），可用 ObSharpWindowsSdkVersion 覆盖。
+
+  用法（在 VS 里）：
+    * 用「打开本地文件夹」/ 把本文件加进解决方案即可；
+    * CEF / Qt6 由 CMake 那侧（cmake/ObSharpDeps.cmake）按 obs-studio 的清单自动
+      下到 lib/deps/，通常不用管；想用现成的就设 CEFRootDir / Qt6Dir
+      （或环境变量 CEF_ROOT_DIR / OBS_QT_DIR）。
+
+  依赖 CEF + Qt6，所以故意没有放进 OBSharp.slnx：不想让只关心托管代码的人
+  （dotnet build）因为缺原生依赖而失败。
+-->
+<Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <!-- arm64 是在 x64 机器上交叉编：要装 VS 的「C++ ARM64 生成工具」组件，
+         Qt6 会自动下 ARM64 + x64 两份（x64 那份当 QT_HOST_PATH）。 -->
+    <ProjectConfiguration Include="Debug|ARM64">
+      <Configuration>Debug</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64">
+      <Configuration>Release</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{1293A0C7-1CCF-4E76-989E-C6D39F8FDE7E}</ProjectGuid>
+    <RootNamespace>OBSharp.Interop.Native</RootNamespace>
+    <Keyword>MakeFileProj</Keyword>
+    <!-- Windows SDK 钉成 OBS 32 自己用的那个版本；设空字符串表示用本机最新的。 -->
+    <ObSharpWindowsSdkVersion Condition="'$(ObSharpWindowsSdkVersion)' == ''">10.0.26100.0</ObSharpWindowsSdkVersion>
+    <WindowsTargetPlatformVersion Condition="'$(ObSharpWindowsSdkVersion)' != ''">$(ObSharpWindowsSdkVersion)</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformVersion Condition="'$(WindowsTargetPlatformVersion)' == ''">10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Makefile</ConfigurationType>
+    <!-- 工具集跟着 IDE 走：VS 2026 用 v145（OBS 32 本体也是 v145），VS 2022 用 v143。 -->
+    <PlatformToolset Condition="'$(PlatformToolset)' == '' And $(VisualStudioVersion.StartsWith('18.'))">v145</PlatformToolset>
+    <PlatformToolset Condition="'$(PlatformToolset)' == ''">v143</PlatformToolset>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)' != 'Debug'">false</UseDebugLibraries>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <PropertyGroup>
+    <OutDir>$(ProjectDir)..\..\out\nmake\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(OutDir)int\</IntDir>
+  </PropertyGroup>
+
+  <!-- 路径与参数 -->
+
+  <PropertyGroup>
+    <ObSharpRepoRoot>$([System.IO.Path]::GetFullPath('$(ProjectDir)..\..'))</ObSharpRepoRoot>
+
+    <!-- CMake 生成器：跟着当前 IDE 走（VS 2026 → "Visual Studio 18 2026"，和 OBS 32 一致），可覆盖。 -->
+    <ObSharpCMakeGenerator Condition="'$(ObSharpCMakeGenerator)' == '' And $(VisualStudioVersion.StartsWith('18.'))">Visual Studio 18 2026</ObSharpCMakeGenerator>
+    <ObSharpCMakeGenerator Condition="'$(ObSharpCMakeGenerator)' == ''">Visual Studio 17 2022</ObSharpCMakeGenerator>
+
+    <!-- MSBuild 的 Win32 在 CMake 里还是 Win32，但输出目录里我们叫 x86。 -->
+    <ObSharpCMakeArch Condition="'$(Platform)' == 'x64'">x64</ObSharpCMakeArch>
+    <ObSharpCMakeArch Condition="'$(Platform)' == 'Win32'">x86</ObSharpCMakeArch>
+    <ObSharpCMakeArch Condition="'$(Platform)' == 'ARM64'">arm64</ObSharpCMakeArch>
+
+    <!-- -A 的参数：OBS 自己也是 x64,version=10.0.26100.0，把 SDK 一起钉住。 -->
+    <ObSharpCMakeArchArg>$(Platform)</ObSharpCMakeArchArg>
+    <ObSharpCMakeArchArg Condition="'$(ObSharpWindowsSdkVersion)' != ''">$(Platform),version=$(ObSharpWindowsSdkVersion)</ObSharpCMakeArchArg>
+
+    <ObSharpBuildDir>$(ObSharpRepoRoot)\out\build\native-$(Platform)</ObSharpBuildDir>
+    <ObSharpNativeOutDir>$(ObSharpRepoRoot)\out\native\$(ObSharpCMakeArch)\$(Configuration)</ObSharpNativeOutDir>
+
+    <!-- 也可以用环境变量。 -->
+    <CEFRootDir Condition="'$(CEFRootDir)' == ''">$(CEF_ROOT_DIR)</CEFRootDir>
+    <Qt6Dir Condition="'$(Qt6Dir)' == ''">$(OBS_QT_DIR)</Qt6Dir>
+
+    <ObSharpCMakeArgs>-DCMAKE_EXPORT_COMPILE_COMMANDS=OFF</ObSharpCMakeArgs>
+    <ObSharpCMakeArgs Condition="'$(CEFRootDir)' != ''">$(ObSharpCMakeArgs) -DCEF_ROOT_DIR="$(CEFRootDir)"</ObSharpCMakeArgs>
+    <ObSharpCMakeArgs Condition="'$(Qt6Dir)' != ''">$(ObSharpCMakeArgs) -DCMAKE_PREFIX_PATH="$(Qt6Dir)"</ObSharpCMakeArgs>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <NMakeBuildCommandLine>cmake -S "$(ObSharpRepoRoot)" -B "$(ObSharpBuildDir)" -G "$(ObSharpCMakeGenerator)" -A $(ObSharpCMakeArchArg) $(ObSharpCMakeArgs) &amp;&amp; cmake --build "$(ObSharpBuildDir)" --config $(Configuration) --target OBSharp.Interop.Native</NMakeBuildCommandLine>
+    <NMakeCleanCommandLine>if exist "$(ObSharpBuildDir)\CMakeCache.txt" cmake --build "$(ObSharpBuildDir)" --config $(Configuration) --target clean</NMakeCleanCommandLine>
+    <NMakeReBuildCommandLine>$(NMakeCleanCommandLine) &amp;&amp; $(NMakeBuildCommandLine)</NMakeReBuildCommandLine>
+    <NMakeOutput>$(ObSharpNativeOutDir)\OBSharp.Interop.Native.dll</NMakeOutput>
+    <NMakePreprocessorDefinitions>OBSHARP_NATIVE_BUILD=1;%(NMakePreprocessorDefinitions)</NMakePreprocessorDefinitions>
+    <NMakeIncludeSearchPath>$(ObSharpRepoRoot)\src\OBSharp.Interop.Native\include;%(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <BuildLog>
+      <Path>$(IntDir)Build.log</Path>
+    </BuildLog>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <None Include="include\OBSharp.Interop.Native.h" />
+    <None Include="CMakeLists.txt" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
