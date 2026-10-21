@@ -3,14 +3,7 @@
 @inject OBSharpPluginManager Manager
 @inject PluginManagerState State
 
-<PageTitle>OB# 插件</PageTitle>
-
-<h1>插件</h1>
-
-<p class="note">
-    列表存在 OB# 数据目录的 <code>plugins.ini</code> 里；启用 / 停用 / 移除 / 添加都会写回这个文件。
-    插件是程序集（<code>.dll</code>），路径可以写绝对路径，也可以写相对 OB# 数据目录的路径。
-</p>
+<PageTitle>OB# 插件管理器</PageTitle>
 
 @if (State.Message is { Length: > 0 })
 {
@@ -18,16 +11,12 @@
 }
 
 <div class="add">
-    <label for="plugin-path">添加插件</label>
-    <input id="plugin-path" type="text" @bind="_addPath" @bind:event="oninput"
-           placeholder="插件程序集路径（绝对路径，或者相对 OB# 数据目录的路径）"
-           @onkeydown="OnKeyDown" />
-    <button type="button" class="btn btn-primary" @onclick="Add" disabled="@_busy">添加</button>
+    <button type="button" class="btn btn-primary" @onclick="Add" disabled="@_busy">添加插件</button>
 </div>
 
 @if (Manager.Plugins.Count is 0)
 {
-    <p class="note">列表是空的：在上面填一个程序集路径加进来，或者直接编辑 <code>plugins.ini</code>。</p>
+    <p class="note">列表是空的。</p>
 }
 else
 {
@@ -44,8 +33,8 @@ else
             {
                 <tr>
                     <td>
-                        <div class="name">@(entry.Name ?? entry.Identifier)</div>
-                        <div class="note"><code>@entry.AssemblyPath</code></div>
+                        <div class="name">@(entry.Name ?? "Unloaded")</div>
+                        <div class="note"><code>@entry.Path</code></div>
                         @if (!string.IsNullOrEmpty(entry.Description))
                         {
                             <div class="note">@entry.Description</div>
@@ -54,36 +43,58 @@ else
                     <td>
                         @switch (entry.Status)
                         {
-                            case OBSharpPluginStatus.Enabled:
-                                <span class="status status-on">已启用</span>
+                            case OBSharpPluginStatus.Unload:
+                                <span class="status status-off">未加载</span>
+                                break;
+                            case OBSharpPluginStatus.Loading:
+                                <span class="status status-off">加载中</span>
+                                break;
+                            case OBSharpPluginStatus.Loaded:
+                                <span class="status status-on">已加载</span>
+                                break;
+                            case OBSharpPluginStatus.Unloading:
+                                <span class="status status-off">卸载中</span>
                                 break;
                             case OBSharpPluginStatus.Failed:
-                                <span class="status status-fail">加载失败</span>
+                                <span class="status status-fail">失败</span>
                                 break;
                             default:
-                                <span class="status status-off">已停用</span>
+                                <span class="status status-off">未知状态</span>
                                 break;
                         }
-                        @if (!string.IsNullOrEmpty(entry.Error))
+                        @if (entry.Exception is { } exception)
                         {
-                            <div class="note error">@entry.Error</div>
+                            <div class="note error">@exception.Message</div>
                         }
                     </td>
                     <td class="right">
-                        @if (entry.Plugin is PluginManagerPlugin)
+                        @switch (entry)
                         {
-                            @* 停用自己 = 面板没了、这次会话里也要不回来：不给这个按钮。 *@
-                            <span class="note">面板本体</span>
-                        }
-                        else if (entry.Status is OBSharpPluginStatus.Enabled)
-                        {
-                            <button type="button" class="btn" @onclick="() => Disable(entry)" disabled="@_busy">停用</button>
-                            <button type="button" class="btn btn-danger" @onclick="() => Remove(entry)" disabled="@_busy">移除</button>
-                        }
-                        else
-                        {
-                            <button type="button" class="btn" @onclick="() => Enable(entry)" disabled="@_busy">启用</button>
-                            <button type="button" class="btn btn-danger" @onclick="() => Remove(entry)" disabled="@_busy">移除</button>
+                            case { Instance: PluginManagerPlugin }:
+                                <span class="note">面板本体</span>
+                                break;
+                            case { Status: OBSharpPluginStatus.Loading }:
+                                <button type="button" class="btn btn-danger" @onclick="() => Remove(entry)"
+                                        disabled="@_busy">移除</button>
+                                break;
+                            case { Status: OBSharpPluginStatus.Loaded }:
+                                <button type="button" class="btn" @onclick="() => Disable(entry)" disabled="@_busy">停用</button>
+                                <button type="button" class="btn btn-danger" @onclick="() => Remove(entry)"
+                                        disabled="@_busy">移除</button>
+                                break;
+                            case { Status: OBSharpPluginStatus.Unloading }:
+                                <button type="button" class="btn btn-danger" @onclick="() => Remove(entry)"
+                                        disabled="@_busy">移除</button>
+                                break;
+                            case { Status: OBSharpPluginStatus.Unload }:
+                                <button type="button" class="btn" @onclick="() => Enable(entry)" disabled="@_busy">启用</button>
+                                <button type="button" class="btn btn-danger" @onclick="() => Remove(entry)"
+                                        disabled="@_busy">移除</button>
+                                break;
+                            case { Status: OBSharpPluginStatus.Failed }:
+                                <button type="button" class="btn btn-danger" @onclick="() => Remove(entry)"
+                                        disabled="@_busy">移除</button>
+                                break;
                         }
                     </td>
                 </tr>
@@ -93,7 +104,6 @@ else
 }
 
 @code {
-    private string? _addPath;
     private bool _busy;
     
     // 交互式渲染下组件是长活的；状态变化（别的会话改了插件列表）时刷新。
@@ -111,48 +121,40 @@ else
 
     private async Task Add()
     {
-        if (string.IsNullOrWhiteSpace(_addPath))
-        {
-            State.Fail("先填一个插件程序集路径。");
-            return;
-        }
-
-        string path = _addPath.Trim();
-        if (Manager.Find(path) is { } existing)
-        {
-            State.Fail($"\"{path}\" 已经在列表里了（{existing.Name ?? existing.Identifier}）。");
-            return;
-        }
+        // TODO: 弹出文件选择器 需要QT添加相关支持
 
         await Run(() =>
         {
+            string path = ""; // TODO: 通过文件选择器获取插件路径
             var added = Manager.Add(path);
+            if (added is null)
+                return false;
+
             State.Info($"已添加 {Describe(added)}，默认是停用的，点「启用」才会加载。");
-            _addPath = null;
             return true;
         });
     }
 
-    private async Task Enable(OBSharpPluginEntry entry) => await Run(() =>
+    private async Task Enable(OBSharpPluginInfo entry) => await Run(() =>
     {
-        if (Manager.Enable(entry))
+        if (Manager.Load(entry))
         {
             State.Info($"已启用 {Describe(entry)}。");
             return true;
         }
 
-        State.Fail($"启用 {Describe(entry)} 失败：{entry.Error ?? "原因见上方"}。");
+        State.Fail($"启用 {Describe(entry)} 失败：{entry.Exception?.Message ?? "原因见上方"}。");
         return false;
     });
 
-    private async Task Disable(OBSharpPluginEntry entry) => await Run(() =>
+    private async Task Disable(OBSharpPluginInfo entry) => await Run(() =>
     {
-        Manager.Disable(entry);
+        Manager.Unload(entry);
         State.Info($"已停用 {Describe(entry)}。");
         return true;
     });
 
-    private async Task Remove(OBSharpPluginEntry entry) => await Run(() =>
+    private async Task Remove(OBSharpPluginInfo entry) => await Run(() =>
     {
         Manager.Remove(entry);
         State.Info($"已移除 {Describe(entry)}。");
@@ -184,5 +186,5 @@ else
         await Task.CompletedTask;
     }
 
-    private static string Describe(OBSharpPluginEntry entry) => entry.Name ?? entry.Identifier;
+    private static string Describe(OBSharpPluginInfo entry) => entry.Name ?? entry.Path;
 }

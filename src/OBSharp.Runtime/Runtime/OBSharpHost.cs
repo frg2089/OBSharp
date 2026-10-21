@@ -11,20 +11,39 @@ namespace OBSharp.Runtime;
 /// </summary>
 internal sealed partial class OBSharpHost(
     OBSharpPluginManager pluginManager,
-    ILoggerFactory loggerFactory,
     ILogger<OBSharpHost> logger)
 {
+
     /// <summary>
     /// 插件管理，插件管理器（<c>OBSharp.PluginManager</c>）用它启停插件。
     /// </summary>
     public OBSharpPluginManager PluginManager => pluginManager;
 
+    public string Name
+    {
+        get
+        {
+            LogMethod(nameof(Name));
+            return "OB#";
+        }
+    }
+
+    public string Description
+    {
+        get
+        {
+            LogMethod(nameof(Description));
+            return "通过 CoreCLR 运行插件";
+        }
+    }
+
+
     public bool Load()
     {
+        LogMethod(nameof(Load));
         try
         {
-            logger.LogDebug("Load");
-            pluginManager.LoadPlugins();
+            pluginManager.LoadAll();
             return true;
         }
         catch (Exception ex)
@@ -36,10 +55,11 @@ internal sealed partial class OBSharpHost(
 
     public void PostLoad()
     {
+        LogMethod(nameof(PostLoad));
         try
         {
-            logger.LogDebug("PostLoad");
-            pluginManager.PostLoadPlugins();
+            pluginManager.CanLoadedAll = true;
+            pluginManager.InvokeAll(static i => i.PostLoad());
         }
         catch (Exception ex)
         {
@@ -49,25 +69,20 @@ internal sealed partial class OBSharpHost(
 
     public void Unload()
     {
+        LogMethod(nameof(Unload));
         try
         {
-            logger.LogDebug("Unload");
-            pluginManager.UnloadPlugins();
-            logger.LogInformation("Unloaded.");
+            pluginManager.UnloadAll();
         }
         catch (Exception ex)
         {
             LogError(ex);
         }
-        finally
-        {
-            // OBS 退出时才卸载 OB#，日志工厂顺手收掉。
-            loggerFactory.Dispose();
-        }
     }
 
     public void SetLocale(string? locale)
     {
+        LogMethod(nameof(SetLocale));
         try
         {
             LogLocale(locale);
@@ -91,10 +106,9 @@ internal sealed partial class OBSharpHost(
 
     public void FreeLocale()
     {
+        LogMethod(nameof(FreeLocale));
         try
         {
-            logger.LogDebug("FreeLocale");
-
             // 让之后新建的线程回到系统默认文化。
             CultureInfo.DefaultThreadCurrentUICulture = null;
             CultureInfo.DefaultThreadCurrentCulture = null;
@@ -104,6 +118,9 @@ internal sealed partial class OBSharpHost(
             LogError(ex);
         }
     }
+
+    [LoggerMessage(LogLevel.Debug, "Method \"{method}\" invoked.")]
+    private partial void LogMethod(string? method);
 
     [LoggerMessage(LogLevel.Information, "Locale: {Locale}")]
     private partial void LogLocale(string? locale);

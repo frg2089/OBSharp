@@ -1,35 +1,42 @@
-﻿using System.Reflection;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Runtime.Loader;
 
 namespace OBSharp.Runtime;
 
-/// <summary>
-/// 每个插件一份的加载上下文（可卸载）。
-/// 凡是宿主自己能解析到的程序集（OBSharp.SDK、OBSharp.Interop、
-/// Microsoft.Extensions.Logging.Abstractions ……）一律交给默认上下文加载：否则插件自己的副本
-/// 会带来第二份类型身份，<c>typeof(ObsPlugin).IsAssignableFrom</c> 直接失败，插件永远加载不上。
-/// </summary>
-internal sealed class OBSharpPluginLoadContext(
-    string pluginPath) : AssemblyLoadContext(Path.GetFileNameWithoutExtension(pluginPath), isCollectible: true)
+internal sealed class OBSharpPluginLoadContext(string path)
+    : AssemblyLoadContext(Path.GetFileNameWithoutExtension(path), true)
 {
-    // 宿主（OBSharp.Runtime）的依赖解析器，靠它旁边的 OBSharp.Runtime.deps.json。
     private static readonly AssemblyDependencyResolver HostResolver = new(typeof(OBSharpPluginLoadContext).Assembly.Location);
-    private readonly AssemblyDependencyResolver _pluginResolver = new(pluginPath);
+    private readonly AssemblyDependencyResolver _pluginResolver = new(path);
 
     protected override Assembly? Load(AssemblyName assemblyName)
     {
         if (HostResolver.ResolveAssemblyToPath(assemblyName) is not null)
-            return null;
+            return base.Load(assemblyName);
 
-        // 共享框架里的那几份（宿主跑在 ASP.NET Core 上，Microsoft.Extensions.* 就是从那儿来的）
-        // 不在 deps.json 里，但默认上下文早装着它们了，也不能拿插件自己那份。
-        foreach (Assembly loaded in Default.Assemblies)
-        {
-            if (string.Equals(loaded.GetName().Name, assemblyName.Name, StringComparison.Ordinal))
-                return null;
-        }
+        if (Default.Assemblies.Any(i => i.GetName().Name == assemblyName.Name))
+            return base.Load(assemblyName);
 
-        string? path = _pluginResolver.ResolveAssemblyToPath(assemblyName);
-        return path is null ? null : LoadFromAssemblyPath(path);
+        if (_pluginResolver.ResolveAssemblyToPath(assemblyName) is { Length: not 0 } path)
+            return LoadFromAssemblyPath(path);
+
+        return base.Load(assemblyName);
+    }
+
+    protected override nint LoadUnmanagedDll(string unmanagedDllName)
+    {
+        var libpath = Path.Combine(AppContext.BaseDirectory, "runtimes", RuntimeInformation.RuntimeIdentifier, "native", unmanagedDllName);
+        if (!File.Exists(libpath))
+            libpath = Path.Combine(AppContext.BaseDirectory, unmanagedDllName);
+        if (!File.Exists(libpath))
+            libpath = Path.Combine(Path.GetDirectoryName(path)!, "runtimes", RuntimeInformation.RuntimeIdentifier, "native", unmanagedDllName);
+        if (!File.Exists(libpath))
+            libpath = Path.Combine(Path.GetDirectoryName(path)!, unmanagedDllName);
+
+        if (File.Exists(libpath))
+            return LoadUnmanagedDllFromPath(libpath);
+
+        return base.LoadUnmanagedDll(unmanagedDllName);
     }
 }

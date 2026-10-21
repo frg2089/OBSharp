@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Http.Connections;
 
 using OBSharp.Interop;
 using OBSharp.PluginManager.Components;
+using OBSharp.Runtime;
 
 namespace OBSharp.PluginManager;
 
@@ -30,36 +31,43 @@ namespace OBSharp.PluginManager;
 /// </remarks>
 public sealed class PluginManagerPlugin : ObsPlugin
 {
-    /// <summary>
-    /// host 名。同时是命名管道 / UDS 的一段、CEF 里 domain 的前缀。
-    /// </summary>
     private const string HostName = "plugin-manager";
+    private WebApplicationBuilder? _builder;
     private WebApplication? _app;
+
+    public override string Name => "OB# PluginManager";
 
     /// <inheritdoc/>
     public override string? Description => "OB# 插件管理器：启用 / 停用 / 移除 / 添加插件。";
 
+    public PluginManagerPlugin(IServiceProvider serviceProvider)
+    {
+        _builder = CreateBuilder(HostName);
+        _builder.Services.AddSingleton(serviceProvider.GetRequiredService<OBSharpPluginManager>());
+
+        // 交互式服务器渲染 + 跨组件的状态
+        _builder.Services.AddRazorComponents().AddInteractiveServerComponents();
+        _builder.Services.AddSingleton<PluginManagerState>();
+        _builder.Services.AddHostedService<PluginManagerMenuItem>();
+        _builder.Services.AddTransient<PluginManagerWindow>();
+    }
+
     /// <inheritdoc/>
     public override bool Load()
     {
-        var builder = CreateBuilder(HostName);
-        builder.Services.AddSingleton(OBSModule.PluginManager);
+        if (_builder is null)
+            return false;
 
-        // 交互式服务器渲染 + 跨组件的状态
-        builder.Services.AddRazorComponents().AddInteractiveServerComponents();
-        builder.Services.AddSingleton<PluginManagerState>();
-        builder.Services.AddHostedService<PluginManagerMenuItem>();
-        builder.Services.AddTransient<PluginManagerWindow>();
+        _app = _builder.Build();
+        _builder = null;
 
-        var app = builder.Build();
+        if (!_app.Environment.IsDevelopment())
+            _app.UseExceptionHandler("/error", createScopeForErrors: true);
 
-        if (!app.Environment.IsDevelopment())
-            app.UseExceptionHandler("/error", createScopeForErrors: true);
-
-        app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
+        _app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
 
         // 交互式 SSR 的表单 / DataAnnotations 也要过 antiforgery 中间件。
-        app.UseAntiforgery();
+        _app.UseAntiforgery();
 
         // MapStaticAssets() 默认去 AppContext.BaseDirectory（那是宿主目录，不是插件目录）找
         // 清单；插件的清单在自己旁边，得把绝对路径显式喂进去。
@@ -67,19 +75,18 @@ public sealed class PluginManagerPlugin : ObsPlugin
             Path.GetDirectoryName(typeof(PluginManagerPlugin).Assembly.Location)!,
             $"{typeof(PluginManagerPlugin).Assembly.GetName().Name}.staticwebassets.endpoints.json");
 
-        app.MapStaticAssets(assetManifest);
+        _app.MapStaticAssets(assetManifest);
 
         // 交互式渲染。必须用 .AddInteractiveServerRenderMode()：交互式组件要求服务端
         // 映射好那套端点，缺了它首页直接 500。
-        app.MapRazorComponents<App>()
+        _app.MapRazorComponents<App>()
             .AddInteractiveServerRenderMode()
             .WithStaticAssets(assetManifest);
 
         // 禁掉 SignalR 的 WebSocket，回退到 SSE + 长轮询。
-        RestrictBlazorHubTransports(app);
+        RestrictBlazorHubTransports(_app);
 
-        app.Start();
-        _app = app;
+        _app.Start();
         return true;
     }
 

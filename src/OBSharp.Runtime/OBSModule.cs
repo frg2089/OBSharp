@@ -1,6 +1,12 @@
 ﻿using System.Diagnostics;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
+
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 using OBSharp.Interop;
 using OBSharp.Runtime;
@@ -9,57 +15,142 @@ namespace OBSharp;
 
 public static partial class OBSModule
 {
-    private static OBSharpHost s_host = default!;
-    public const string Name = "OB#";
-    public const string Description = "通过 CoreCLR 运行插件";
+    private static IHost? s_app;
 
     [UnmanagedCallersOnly]
-    public static unsafe void SetPointer(ObsModule* module)
+    public static unsafe void SetPointer(ObsModule* lpModule)
     {
-        string? path = module->GetModuleDataPath();
-        Debug.Assert(path is not null);
-        path = Path.GetFullPath(path);
+        ref var module = ref Unsafe.AsRef<ObsModule>(lpModule);
+        var binaryPath = module.GetModuleBinaryPath();
+        var dataPath = module.GetModuleDataPath();
+        Debug.Assert(!string.IsNullOrEmpty(binaryPath));
+        Debug.Assert(!string.IsNullOrEmpty(dataPath));
 
-        // OBS 模块指针只到这里为止：插件拿不到它，需要的东西都由宿主转成托管对象。
-        s_host = new OBSharpHostBuilder(path).Build();
-    }
+        NativeLibrary.SetDllImportResolver(typeof(Interop.Browser.WebView).Assembly, NativeLibraryResolver);
 
-    /// <summary>
-    /// 插件管理：枚举、启用、停用插件。<c>obs_module_set_pointer</c> 之后才可用。
-    /// 插件管理器（<c>OBSharp.PluginManager</c>）通过友元程序集拿到它，插件拿不到。
-    /// </summary>
-    internal static OBSharpPluginManager PluginManager => s_host.PluginManager;
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings()
+        {
+            ApplicationName = "OB#",
+            ContentRootPath = dataPath,
+        });
+        builder.Logging.AddProvider(new ObsLoggerProvider("OBSharp"));
 
-    [UnmanagedCallersOnly]
-    public static int Load() => s_host.Load() ? 1 : 0;
+        builder.Services
+            .AddOptions<OBSharpHostOptions>()
+            .BindConfiguration("OBSharp")
+            .Configure(options =>
+            {
+                options.BinaryPath ??= binaryPath;
+                options.DataPath ??= dataPath;
+            });
 
-    [UnmanagedCallersOnly]
-    public static void PostLoad() => s_host.PostLoad();
+        builder.Services.AddSingleton<OBSharpPluginRegister>();
+        builder.Services.AddSingleton<OBSharpPluginManager>();
+        builder.Services.AddSingleton<OBSharpHost>();
 
-    [UnmanagedCallersOnly]
-    public static void Unload() => s_host.Unload();
-
-    [UnmanagedCallersOnly]
-    public static unsafe byte* GetName()
-    {
-        int size = Encoding.UTF8.GetByteCount(Name);
-        void* lpsz = NativeMemory.Alloc((nuint)size, sizeof(byte));
-        Encoding.UTF8.GetBytes(Name, new Span<byte>(lpsz, size));
-        return (byte*)lpsz;
+        s_app = builder.Build();
     }
 
     [UnmanagedCallersOnly]
-    public static unsafe byte* GetDescription()
+    public static int Load()
     {
-        int size = Encoding.UTF8.GetByteCount(Description);
-        void* lpsz = NativeMemory.Alloc((nuint)size, sizeof(byte));
-        Encoding.UTF8.GetBytes(Description, new Span<byte>(lpsz, size));
-        return (byte*)lpsz;
+        if (s_app is null)
+            return 0;
+
+        s_app.Start();
+
+        return s_app.Services.GetRequiredService<OBSharpHost>().Load() ? 1 : 0;
     }
 
     [UnmanagedCallersOnly]
-    public static void SetLocale(nint locale) => s_host.SetLocale(Marshal.PtrToStringUTF8(locale));
+    public static void PostLoad()
+    {
+        if (s_app is null)
+            return;
+
+        s_app.Services.GetRequiredService<OBSharpHost>().PostLoad();
+    }
 
     [UnmanagedCallersOnly]
-    public static void FreeLocale() => s_host.FreeLocale();
+    public static void Unload()
+    {
+        if (s_app is null)
+            return;
+
+        s_app.Services.GetRequiredService<OBSharpHost>().Unload();
+
+        s_app.StopAsync().Wait();
+    }
+
+    [UnmanagedCallersOnly]
+    public static nint GetName()
+    {
+        if (s_app is null)
+            return 0;
+
+        var name = s_app.Services.GetRequiredService<OBSharpHost>().Name;
+        return Marshal.StringToCoTaskMemUTF8(name);
+    }
+
+    [UnmanagedCallersOnly]
+    public static nint GetDescription()
+    {
+        if (s_app is null)
+            return 0;
+
+        var description = s_app.Services.GetRequiredService<OBSharpHost>().Description;
+        return Marshal.StringToCoTaskMemUTF8(description);
+    }
+
+    [UnmanagedCallersOnly]
+    public static void SetLocale(nint locale)
+    {
+        if (s_app is null)
+            return;
+
+        s_app.Services.GetRequiredService<OBSharpHost>().SetLocale(Marshal.PtrToStringUTF8(locale));
+    }
+
+    [UnmanagedCallersOnly]
+    public static void FreeLocale()
+    {
+        if (s_app is null)
+            return;
+
+        s_app.Services.GetRequiredService<OBSharpHost>().FreeLocale();
+    }
+
+    private static nint NativeLibraryResolver(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
+    {
+        string prefix = string.Empty;
+        string surfix = string.Empty;
+        if (OperatingSystem.IsWindows())
+        {
+            surfix = ".dll";
+        }
+        else if (OperatingSystem.IsLinux())
+        {
+            prefix = "lib";
+            surfix = ".so";
+        }
+        else if (OperatingSystem.IsMacOS())
+        {
+            prefix = "lib";
+            surfix = ".dylib";
+        }
+
+        var libpath = Path.Combine(AppContext.BaseDirectory, "runtimes", RuntimeInformation.RuntimeIdentifier, "native", $"{prefix}{libraryName}{surfix}");
+        if (!File.Exists(libpath))
+            libpath = Path.Combine(AppContext.BaseDirectory, "runtimes", RuntimeInformation.RuntimeIdentifier, "native", $"{libraryName}{surfix}");
+        if (!File.Exists(libpath))
+            libpath = Path.Combine(AppContext.BaseDirectory, $"{prefix}{libraryName}{surfix}");
+        if (!File.Exists(libpath))
+            libpath = Path.Combine(AppContext.BaseDirectory, $"{libraryName}{surfix}");
+
+        if (File.Exists(libpath))
+            return NativeLibrary.Load(libpath);
+
+        return 0;
+
+    }
 }

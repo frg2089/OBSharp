@@ -1,7 +1,5 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace OBSharp;
@@ -13,21 +11,6 @@ namespace OBSharp;
 /// </summary>
 public abstract class ObsPlugin
 {
-    /// <summary>
-    /// 宿主附加的环境信息。只有加载开始之后（<see cref="Load"/> 及以后）才可用。
-    /// </summary>
-    internal ObsPluginContext Context
-    {
-        get => field ?? throw new InvalidOperationException($"Plugin \"{GetType()}\" has not been attached by a host yet.");
-        set
-        {
-            if (field is not null)
-                throw new InvalidOperationException($"Plugin \"{GetType()}\" was already attached.");
-
-            field = value;
-        }
-    }
-
     /// <summary>
     /// 插件名。默认取插件程序集名（不含扩展名），同时用作数据目录名。
     /// </summary>
@@ -44,11 +27,6 @@ public abstract class ObsPlugin
     /// 插件描述，默认 null。
     /// </summary>
     public virtual string? Description => null;
-
-    /// <summary>
-    /// 插件的数据目录，等于 <see cref="ObsPluginContext.DataFolder"/>。
-    /// </summary>
-    public string DataFolder => Context.DataFolder;
 
     /// <summary>
     /// 加载插件。返回 false 表示加载失败：宿主会记一条警告，然后回滚这个插件
@@ -73,20 +51,19 @@ public abstract class ObsPlugin
     /// </remarks>
     public virtual void Unload() { }
 
-
-    public virtual WebApplicationBuilder CreateBuilder(string? name = null)
+    protected virtual WebApplicationBuilder CreateBuilder(string? name = null)
     {
         name ??= Name;
 
         var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions
         {
             ApplicationName = name,
-            ContentRootPath = DataFolder,
-            WebRootPath = Path.Combine(DataFolder, "wwwroot"),
+            ContentRootPath = AppContext.BaseDirectory,
+            WebRootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot"),
         });
 
         // 跟 ObsPluginContext.CreateBuilder() 一样：日志落进 OBS 日志，每行带插件标识符。
-        builder.Logging.AddProvider(new ObsLoggerProvider(Context.Identifier));
+        builder.Logging.AddProvider(new ObsLoggerProvider(name));
 
         builder.WebHost.ConfigureKestrel(options =>
         {
