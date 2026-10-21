@@ -43,11 +43,14 @@ internal sealed partial class OBSharpHost(
         LogMethod(nameof(Load));
         try
         {
+            LogLifecycleBegin("Load", pluginManager.Plugins.Count);
             pluginManager.LoadAll();
+            LogLifecycleEnd("Load", "ok");
             return true;
         }
         catch (Exception ex)
         {
+            LogLifecycleEnd("Load", "failed");
             LogError(ex);
             return false;
         }
@@ -58,11 +61,15 @@ internal sealed partial class OBSharpHost(
         LogMethod(nameof(PostLoad));
         try
         {
+            LogLifecycleBegin("PostLoad", pluginManager.Plugins.Count);
             pluginManager.CanLoadedAll = true;
+            LogCanLoadedAllSet();
             pluginManager.InvokeAll(static i => i.PostLoad());
+            LogLifecycleEnd("PostLoad", "ok");
         }
         catch (Exception ex)
         {
+            LogLifecycleEnd("PostLoad", "failed");
             LogError(ex);
         }
     }
@@ -72,10 +79,13 @@ internal sealed partial class OBSharpHost(
         LogMethod(nameof(Unload));
         try
         {
+            LogLifecycleBegin("Unload", pluginManager.Plugins.Count);
             pluginManager.UnloadAll();
+            LogLifecycleEnd("Unload", "ok");
         }
         catch (Exception ex)
         {
+            LogLifecycleEnd("Unload", "failed");
             LogError(ex);
         }
     }
@@ -118,6 +128,15 @@ internal sealed partial class OBSharpHost(
             LogError(ex);
         }
     }
+
+    [LoggerMessage(LogLevel.Debug, "Lifecycle {Phase}: begin ({PluginCount} plugin(s))")]
+    private partial void LogLifecycleBegin(string phase, int pluginCount);
+
+    [LoggerMessage(LogLevel.Debug, "Lifecycle {Phase}: {Result}")]
+    private partial void LogLifecycleEnd(string phase, string result);
+
+    [LoggerMessage(LogLevel.Debug, "CanLoadedAll is now true; later loads will call PostLoad immediately")]
+    private partial void LogCanLoadedAllSet();
 
     [LoggerMessage(LogLevel.Debug, "Method \"{method}\" invoked.")]
     private partial void LogMethod(string? method);

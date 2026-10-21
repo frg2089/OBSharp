@@ -409,9 +409,15 @@ set(OBSHARP_VERSION_FILE "0.0.0.0")
   Copy-Into $RuntimePublish $anyOutDir
   Copy-Item -LiteralPath (Join-Path $NativeDir $NativeName) -Destination $anyOutDir -Force
 
-  # 数据目录：locale 这些，加上插件管理器插件本身。
+  # 插件管理器：放 bin/any/OBSharp.PluginManager/（托管程序集，跟宿主同一个目录树）。
+  #
+  # 为什么不再放 data/：它是个托管插件，运行时要被 AssemblyLoadContext 加载，跟
+  # 宿主（OBSharp.Runtime）和它的依赖待一起最自然，也符合 plugins.ini 里
+  # "$binAny/..." 的写法。data/ 留给真正的数据（locale、插件自己的内容）。
+  Copy-Into $pluginPublish.FullName (Join-Path $anyOutDir 'OBSharp.PluginManager')
+
+  # 数据目录：locale 这些。
   Copy-Into $DataSrcDir $dataOutDir
-  Copy-Into $pluginPublish.FullName (Join-Path $dataOutDir 'OBSharp.PluginManager')
 
   if ($OsName -eq 'osx') {
     # NativeAOT 在 macOS 上出的是 OBSharp.dylib，而 OBS 那边模块扩展名是空的
@@ -467,7 +473,7 @@ set(OBSHARP_VERSION_FILE "0.0.0.0")
       $listPath,
       @(
         '; OB# plugin list: <assembly path> = <true|false>'
-        'OBSharp.PluginManager/OBSharp.PluginManager.dll = true'
+        '$binAny/OBSharp.PluginManager/OBSharp.PluginManager.dll = true'
       ),
       [System.Text.UTF8Encoding]::new($true))
   }
@@ -481,7 +487,8 @@ set(OBSHARP_VERSION_FILE "0.0.0.0")
   Write-Host "  插件目录：$BundleDir" -ForegroundColor Green
   Write-Host "  模块：    $moduleOutDir/$LoaderName"
   Write-Host "  宿主：    $anyOutDir/OBSharp.Runtime.dll"
-  Write-Host "  数据：    $dataOutDir（含 plugins.ini 与 OBSharp.PluginManager/）"
+  Write-Host "  插件管理器：$anyOutDir/OBSharp.PluginManager/OBSharp.PluginManager.dll"
+  Write-Host "  数据：    $dataOutDir（含 plugins.ini）"
   Write-Host ('  文件 {0} 个，共 {1:N2} MB' -f $files.Count, ($total / 1MB))
 
   Write-Host @"

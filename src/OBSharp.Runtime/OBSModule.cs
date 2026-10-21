@@ -53,6 +53,14 @@ public static partial class OBSModule
         builder.Services.AddSingleton<OBSharpHost>();
 
         s_app = builder.Build();
+
+        // 这两个路径是排查「插件列表读不到 / 插件 dll 找不到」的第一条线索：
+        // 它们决定 $bin / $binAny / $data 三个前缀解析到哪里。
+        var startupLogger = s_app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("OBSharp.OBSModule");
+        startupLogger.LogDebug("Module binary path: {BinaryPath}", binaryPath);
+        startupLogger.LogDebug("Module data path:   {DataPath}", dataPath);
+        startupLogger.LogDebug("Managed host path:  {ManagedPath}", AppContext.BaseDirectory);
+        startupLogger.LogDebug(".NET runtime:       {RuntimeVersion}", Environment.Version);
     }
 
     [UnmanagedCallersOnly]
@@ -61,9 +69,15 @@ public static partial class OBSModule
         if (s_app is null)
             return 0;
 
-        s_app.Start();
+        var logger = s_app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("OBSharp.OBSModule");
+        logger.LogDebug("OBSModule.Load: starting the host");
 
-        return s_app.Services.GetRequiredService<OBSharpHost>().Load() ? 1 : 0;
+        s_app.Start();
+        logger.LogDebug("OBSModule.Load: host started; beginning plugin load");
+
+        var loaded = s_app.Services.GetRequiredService<OBSharpHost>().Load();
+        logger.LogDebug("OBSModule.Load: finished (result={Result})", loaded);
+        return loaded ? 1 : 0;
     }
 
     [UnmanagedCallersOnly]
@@ -71,6 +85,10 @@ public static partial class OBSModule
     {
         if (s_app is null)
             return;
+
+        s_app.Services.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("OBSharp.OBSModule")
+            .LogDebug("OBSModule.PostLoad: notifying plugins");
 
         s_app.Services.GetRequiredService<OBSharpHost>().PostLoad();
     }
@@ -81,9 +99,14 @@ public static partial class OBSModule
         if (s_app is null)
             return;
 
+        var logger = s_app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("OBSharp.OBSModule");
+        logger.LogDebug("OBSModule.Unload: stopping plugins");
+
         s_app.Services.GetRequiredService<OBSharpHost>().Unload();
 
+        logger.LogDebug("OBSModule.Unload: stopping the host");
         s_app.StopAsync().Wait();
+        logger.LogDebug("OBSModule.Unload: done");
     }
 
     [UnmanagedCallersOnly]
