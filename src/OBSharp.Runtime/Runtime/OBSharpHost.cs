@@ -10,6 +10,7 @@ namespace OBSharp.Runtime;
 /// 顺手同步语言。插件本身不归它管。
 /// </summary>
 internal sealed partial class OBSharpHost(
+    OBSharpPluginRegister register,
     OBSharpPluginManager pluginManager,
     ILogger<OBSharpHost> logger)
 {
@@ -43,6 +44,7 @@ internal sealed partial class OBSharpHost(
         LogMethod(nameof(Load));
         try
         {
+            register.Load();
             LogLifecycleBegin("Load", pluginManager.Plugins.Count);
             pluginManager.LoadAll();
             LogLifecycleEnd("Load", "ok");

@@ -10,9 +10,7 @@ internal sealed partial class OBSharpPluginManager(
 {
     private readonly Lock _lock = new();
     public bool CanLoadedAll { get; set; }
-    public List<OBSharpPluginInfo> Plugins { get; } = [.. register.Plugins
-        .Where(i => i.Value)
-        .Select(i=> new OBSharpPluginInfo(i.Key))];
+    public List<OBSharpPluginInfo> Plugins { get; } = [];
 
     public OBSharpPluginInfo? Add(string path, bool enabled = true)
     {
@@ -82,6 +80,13 @@ internal sealed partial class OBSharpPluginManager(
     {
         lock (_lock)
         {
+            if(Plugins.Count is 0)
+            {
+                Plugins.AddRange(register.Plugins
+                    .Where(i => i.Value)
+                    .Select(i => new OBSharpPluginInfo(i.Key)));
+            }
+
             LogLoadAllStarting(Plugins.Count);
 
             var loaded = 0;

@@ -413,7 +413,7 @@ set(OBSHARP_VERSION_FILE "0.0.0.0")
   #
   # 为什么不再放 data/：它是个托管插件，运行时要被 AssemblyLoadContext 加载，跟
   # 宿主（OBSharp.Runtime）和它的依赖待一起最自然，也符合 plugins.ini 里
-  # "$binAny/..." 的写法。data/ 留给真正的数据（locale、插件自己的内容）。
+  # "$bin/any/..." 的写法。data/ 留给真正的数据（locale、插件自己的内容）。
   Copy-Into $pluginPublish.FullName (Join-Path $anyOutDir 'OBSharp.PluginManager')
 
   # 数据目录：locale 这些。
@@ -473,7 +473,7 @@ set(OBSHARP_VERSION_FILE "0.0.0.0")
       $listPath,
       @(
         '; OB# plugin list: <assembly path> = <true|false>'
-        '$binAny/OBSharp.PluginManager/OBSharp.PluginManager.dll = true'
+        '$bin/any/OBSharp.PluginManager/OBSharp.PluginManager.dll = true'
       ),
       [System.Text.UTF8Encoding]::new($true))
   }

@@ -21,6 +21,8 @@ public static partial class OBSModule
     {
         ref var module = ref Unsafe.AsRef<ObsModule>(lpModule);
         var binaryPath = module.GetModuleBinaryPath();
+        binaryPath = Path.GetDirectoryName(binaryPath);
+        binaryPath = Path.GetDirectoryName(binaryPath);
         var dataPath = module.GetModuleDataPath();
         Debug.Assert(!string.IsNullOrEmpty(binaryPath));
         Debug.Assert(!string.IsNullOrEmpty(dataPath));

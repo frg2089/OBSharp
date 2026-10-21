@@ -64,5 +64,39 @@ internal sealed class ObsLogger(string pluginId, string categoryName, IExternalS
         string line = text.ToString();
         Debug.WriteLine(line);
         Obs.Log(obsLogLevel, line);
+
+        // The exception itself was being dropped: formatter() renders the message only, so a
+        // failed plugin load produced one line with no type, message or stack. That is exactly
+        // the case where the detail matters most, so emit it on its own lines.
+        if (exception is not null)
+        {
+            foreach (string detail in Describe(exception))
+                Obs.Log(obsLogLevel, $"[{pluginId}] {level,-5} {categoryName,-16}: {detail}");
+        }
+    }
+
+    /// <summary>
+    /// Renders an exception (and its inner exceptions) as indented lines.
+    /// </summary>
+    /// <remarks>
+    /// Kept multi-line rather than one blob: OBS's log is line-oriented, and a 40-line stack
+    /// trace prefixed on every line is far easier to read than one enormous line. Inner
+    /// exceptions are included because loader failures are almost always wrapped
+    /// (TargetInvocationException -> FileNotFoundException -> ...).
+    /// </remarks>
+    private static IEnumerable<string> Describe(Exception exception)
+    {
+        var depth = 0;
+        for (Exception? current = exception; current is not null; current = current.InnerException, depth++)
+        {
+            string indent = new(' ', depth * 2);
+            yield return $"{indent}{current.GetType().FullName}: {current.Message}";
+
+            if (current.StackTrace is { Length: not 0 } stack)
+            {
+                foreach (string frame in stack.Split('\n'))
+                    yield return $"{indent}  {frame.TrimEnd()}";
+            }
+        }
     }
 }
