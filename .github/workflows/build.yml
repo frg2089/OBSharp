@@ -323,6 +323,12 @@ jobs:
           name: runtime
           path: out/${{ matrix.assemblies }}
 
+      - name: 下载插件管理器程序集
+        uses: actions/download-artifact@v8
+        with:
+          name: pluginmanager-assemblies
+          path: out/${{ matrix.assemblies }}/OBSharp.PluginManager/
+
       - name: 下载 OB# 加载器
         uses: actions/download-artifact@v8
         with:
@@ -335,12 +341,6 @@ jobs:
           $source = "src/OBSharp.Runtime/Data/*"
           $destination = New-Item -ItemType Directory -Force -Path "out/${{ matrix.data }}"
           Copy-Item -Path $source -Destination $destination -Recurse -Force
-
-      - name: 下载插件管理器程序集
-        uses: actions/download-artifact@v8
-        with:
-          name: pluginmanager-assemblies
-          path: out/${{ matrix.data }}/OBSharp.PluginManager/
 
       - name: 创建 macOS 插件包 Info.plist
         if: ${{ startsWith(matrix.rid, 'osx-') }}
