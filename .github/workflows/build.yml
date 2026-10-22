@@ -71,8 +71,7 @@ jobs:
 
       - name: 还原 .NET 项目
         run: |-
-          dotnet restore OBSharp.slnx --graph --artifacts-path artifacts
-          dotnet restore src/OBSharp.PluginManager --graph --artifacts-path artifacts
+          dotnet restore --graph --artifacts-path artifacts
 
       # ── Interop 绑定生成：为什么必须现场生成、为什么不缓存产物 ─────────────────
       # Generated/ 在 .gitignore 里（绑定产物不入库），托管构建前必须先生成。生成依赖
@@ -111,15 +110,15 @@ jobs:
         run: ./scripts/Build-DevDist.ps1 -GeneratorOnly -Configuration Release -Framework net11.0
 
       # 下面的编译 / 发布链与 scripts/Build-DevDist.ps1 的⑤保持一致：解决方案两套 TFM
-      # 一起编（插件管理器只有 net10.0，跟着宿主那份 -f 走会错），发布时各按各的 TFM。
+      # 一起编，发布时各按各的 TFM。
       - name: 编译 .NET 项目
-        run: dotnet build OBSharp.slnx --graph --artifacts-path artifacts --configuration Release --no-restore
+        run: dotnet build --graph --artifacts-path artifacts --configuration Release --no-restore
 
       - name: 发布 Runtime
         run: dotnet publish src/OBSharp.Runtime --graph --artifacts-path artifacts --configuration Release --framework net11.0 --no-restore
 
       - name: 发布 PluginManager
-        run: dotnet publish src/OBSharp.PluginManager --graph --artifacts-path artifacts --configuration Release --no-restore
+        run: dotnet publish src/OBSharp.PluginManager --graph --artifacts-path artifacts --configuration Release --framework net11.0 --no-restore
 
       - name: 上传托管程序集
         uses: actions/upload-artifact@v7
@@ -132,7 +131,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: pluginmanager-assemblies
-          path: artifacts/publish/OBSharp.PluginManager/release_net10.0/
+          path: artifacts/publish/OBSharp.PluginManager/release_net11.0/
           if-no-files-found: error
 
       - name: 上传构建缓存
