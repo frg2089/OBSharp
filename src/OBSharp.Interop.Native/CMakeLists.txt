@@ -1,5 +1,13 @@
 cmake_minimum_required(VERSION 3.20)
 
+# CMP0141（3.25+）决定 /Z7、/Zi 这类调试格式开关从哪来：OLD 行为把它们塞进
+# CMAKE_<LANG>_FLAGS_<CONFIG>（Debug 默认就是 /Zi），并完全无视下面的
+# CMAKE_MSVC_DEBUG_INFORMATION_FORMAT 抽象。必须在第一次 project() 之前定成 NEW，
+# 否则 /Zi 会悄悄回来（共享编译器 PDB，破坏可复现构建）。
+if(POLICY CMP0141)
+  cmake_policy(SET CMP0141 NEW)
+endif()
+
 # ---------------------------------------------------------------------------
 # Project version
 # Directory.Version.cmake 由 CI 生成；本地缺失时使用占位版本。
@@ -39,10 +47,23 @@ if(MSVC)
   # Deterministic 的硬要求：
   #   * /ZI（EditAndContinue）与 /Brepro、/experimental:deterministic 互斥
   #     （D8016），所以 Debug 也不能用它；
-  #   * /Zi 的共享编译器 PDB 会让链接器产出的 PDB 每次都不同（哪怕 DLL 一致）。
-  # /Z7 把调试信息放进 .obj，链接器直接产出 PDB —— DLL 和 PDB 都可复现。
+  #   * /Zi 的共享编译器 PDB 会被编译器并发写、路径还会烧进 obj，
+  #     让 obj / DLL / PDB 每次都不同（哪怕源码一致）。
+  # /Z7 把调试信息放进 .obj：obj 保持逐字节可复现，调试符号由链接器汇总进 PDB
+  # （见下面的 /DEBUG:FULL，Debug / Release 都产出），一点不少。
   set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "Embedded")
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+  if(NOT POLICY CMP0141)
+    # CMake < 3.25 没有 MSVC_DEBUG_INFORMATION_FORMAT 这层抽象，调试格式开关
+    # 直接躺在 CMAKE_<LANG>_FLAGS_<CONFIG> 里（Debug 默认 /Zi）。手工统一成 /Z7。
+    foreach(_obsharp_config DEBUG MINSIZEREL RELEASE RELWITHDEBINFO)
+      string(REGEX REPLACE "/Z[iI7]" "" _obsharp_cxx_flags
+                           "${CMAKE_CXX_FLAGS_${_obsharp_config}}")
+      string(STRIP "${_obsharp_cxx_flags}" _obsharp_cxx_flags)
+      set(CMAKE_CXX_FLAGS_${_obsharp_config} "${_obsharp_cxx_flags} /Z7")
+    endforeach()
+  endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -240,6 +261,14 @@ endif()
 # ---------------------------------------------------------------------------
 
 if(MSVC)
+  # 目标级再钉一次 /Z7：根 CMakeLists 为了热重载把 MSVC_DEBUG_INFORMATION_FORMAT
+  # 设成 EditAndContinue（/ZI），这里明确覆盖，不让 /ZI 漏进本目标。
+  set_target_properties(
+    OBSharp.Interop.Native
+    PROPERTIES
+      MSVC_DEBUG_INFORMATION_FORMAT "Embedded"
+  )
+
   # 源码为 UTF-8；所有配置都做可复现构建（Deterministic）：
   #   /Brepro + /experimental:deterministic —— 时间戳换成内容哈希；
   #   /pathmap —— 不把构建机的绝对路径烧进调试信息；
@@ -253,9 +282,19 @@ if(MSVC)
       "/pathmap:${OBSHARP_REPO_ROOT}=."
   )
 
+  # 调试符号：/Z7 的 obj（含调试信息）+ /DEBUG:FULL → 链接器汇总出完整 PDB，
+  # 落在 DLL 旁边，Debug / Release 都产出（裸 /DEBUG 等价 /DEBUG:FULL，
+  # VS 2026 已删除 /DEBUG:FASTLINK，别用）。
+  # /DEBUG 会把 /OPT 默认值翻成 NOREF / NOICF，所以非 Debug 配置显式写回
+  # /OPT:REF /OPT:ICF（必须排在 /DEBUG 之后），保持原来 Release 的优化程度。
+  # /PDBALTPATH:%_PDB% 让 DLL 里只嵌 PDB 文件名（不带构建机路径），配合 /Brepro
+  # DLL 依旧逐字节可复现；PDB 只承诺符号完整、可随产物分发，不承诺跨机器一致。
   target_link_options(
     OBSharp.Interop.Native
     PRIVATE
+      /DEBUG:FULL
+      $<$<NOT:$<CONFIG:Debug>>:/OPT:REF>
+      $<$<NOT:$<CONFIG:Debug>>:/OPT:ICF>
       /Brepro
       /INCREMENTAL:NO
       /PDBALTPATH:%_PDB%
