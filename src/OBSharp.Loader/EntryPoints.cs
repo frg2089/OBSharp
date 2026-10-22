@@ -20,7 +20,7 @@ public static unsafe class EntryPoints
     private const int LIBOBS_API_PATCH_VER = 0;
     private const int LIBOBS_API_VER = (LIBOBS_API_MAJOR_VER << 24) | (LIBOBS_API_MINOR_VER << 16) | LIBOBS_API_PATCH_VER;
 
-    private static ObsModule* s_obs_module_pointer;
+    private static ObsModule? s_obs_module;
     private static HostFXR? s_hostFxr;
     private static HostFXRHandle? s_context;
 
@@ -62,17 +62,17 @@ public static unsafe class EntryPoints
             if (s_hostFxr is not null && s_context is not null)
                 return true;
 
-            if (s_obs_module_pointer is null)
+            if (s_obs_module is null)
                 throw new InvalidOperationException("MUST invoke obs_module_set_pointer first.");
 
             Logger.Info("Initializing CoreCLR ...");
 
-            if (s_obs_module_pointer->GetModuleBinaryPath() is not { Length: not 0 } unmanaged)
+            if (s_obs_module.GetModuleBinaryPath() is not { Length: not 0 } unmanaged)
                 throw new InvalidOperationException("Cannot get current plugin's binary path.");
             unmanaged = Path.GetFullPath(unmanaged);
             Logger.Debug($"OBSharp Unmanaged Path: {unmanaged}");
 
-            if (s_obs_module_pointer->GetModuleDataPath() is not { Length: not 0 } dataPath)
+            if (s_obs_module.GetModuleDataPath() is not { Length: not 0 } dataPath)
                 throw new InvalidOperationException("Cannot get current plugin's data path.");
             dataPath = Path.GetFullPath(dataPath);
             Logger.Debug($"OBSharp Data Path: {dataPath}");
@@ -129,9 +129,9 @@ public static unsafe class EntryPoints
     }
 
     [UnmanagedCallersOnly(EntryPoint = "obs_module_set_pointer", CallConvs = new[] { typeof(CallConvCdecl) })]
-    public static void SetPointer(ObsModule* module)
+    public static void SetPointer(nint module)
     {
-        s_obs_module_pointer = module;
+        s_obs_module = new(module, false);
         Logger.Debug("Invoke obs_module_set_pointer.");
         if (!InitializeCoreCLR())
             return;
@@ -139,7 +139,7 @@ public static unsafe class EntryPoints
         if (s_obs_module_set_pointer is 0)
             return;
 
-        ((delegate* unmanaged<ObsModule*, void>)s_obs_module_set_pointer)(module);
+        ((delegate* unmanaged<nint, void>)s_obs_module_set_pointer)(module);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "obs_module_ver", CallConvs = new[] { typeof(CallConvCdecl) })]
