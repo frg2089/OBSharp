@@ -1,3 +1,6 @@
 [submodule "lib/obs-studio"]
 	path = lib/obs-studio
 	url = https://github.com/obsproject/obs-studio.git
+[submodule "lib/obs-browser"]
+	path = lib/obs-browser
+	url = https://github.com/obsproject/obs-browser.git
