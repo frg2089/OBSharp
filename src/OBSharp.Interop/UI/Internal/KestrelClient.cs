@@ -50,7 +50,7 @@ internal sealed class HttpRequest
     public string Host = "";
 
     /// <summary>原请求头。发送时会被滤掉 host / connection / accept-encoding / content-length。</summary>
-    public List<KeyValuePair<string, string>> Headers = new();
+    public List<KeyValuePair<string, string>> Headers = [];
 
     /// <summary>请求体原始字节。</summary>
     public byte[] Body = Array.Empty<byte>();
@@ -68,7 +68,7 @@ internal sealed class HttpResponseHead
     public string StatusText = "";
 
     /// <summary>响应头，保持到达顺序，名字大小写保持原样。</summary>
-    public List<KeyValuePair<string, string>> Headers = new();
+    public List<KeyValuePair<string, string>> Headers = [];
 
     /// <summary>body 的读法。</summary>
     public HttpFraming Framing;

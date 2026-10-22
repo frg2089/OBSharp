@@ -7,7 +7,7 @@ namespace OBSharp.Interop.UI;
 /// <para>
 /// 带的是历史上的 <see cref="OBSharpResult"/>（公开 API 的一部分：调用方会
 /// <c>catch (OBSharpNativeException ex)</c> 之后看 <see cref="Result"/>）。底层的
-/// <see cref="OBSharp.Interop.Native.NativeResult"/> 由 <see cref="NativeErrors"/> 映射过来。
+/// <see cref="OBSharp.Interop.Abi.AbiResult"/> 由 <see cref="NativeErrors"/> 映射过来。
 /// </para>
 /// <para>
 /// <b>不再有「消息从原生侧取」的构造函数。</b>旧版这里会调

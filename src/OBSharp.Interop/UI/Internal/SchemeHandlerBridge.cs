@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
-using OBSharp.Interop.Native;
+using OBSharp.Interop.Abi;
 
 namespace OBSharp.Interop.UI.Internal;
 
@@ -20,7 +20,7 @@ namespace OBSharp.Interop.UI.Internal;
 /// <para>
 /// <b>线程</b>：六个回调除 <c>_resume_*</c> 之外全部在 CEF 的 <b>IO 线程</b>上被调用，
 /// 不是 Qt 主线程——所以这里绝不直接碰 Qt，只有页面消息派发那一处用
-/// <see cref="NativeApi.InvokeUI"/> 切到 Qt 主线程（旧代码走的是
+/// <see cref="AbiApi.InvokeUI"/> 切到 Qt 主线程（旧代码走的是
 /// <c>CefPostTask(TID_UI)</c> + <c>PostToQtThread</c> 两条异步投递，
 /// 效果一样：业务回调最终落在 Qt 主线程）。
 /// </para>
@@ -66,18 +66,18 @@ internal static unsafe class SchemeHandlerBridge
     /// 已经注册过的 (scheme, domain) -&gt; 端点。CEF 里这个键全局唯一，重复注册会失败，
     /// 所以先记账再注册（旧 <c>g_factories</c>）。
     /// </summary>
-    private static readonly Dictionary<string, Endpoint> Factories = new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, Endpoint> Factories = [with(StringComparer.Ordinal)];
 
     /// <summary>
     /// 保护 <see cref="Factories"/> 的「查重 + 注册 + 记账」三步原子性：
     /// 两个线程同时注册同一个 key 时，只允许一个真的去调原生。
     /// </summary>
-    private static readonly object FactoryLock = new();
+    private static readonly Lock FactoryLock = new();
 
     /// <summary>
     /// 交给原生侧的回调表（<c>User</c> 为 0：本类没有任何实例状态，全是静态的）。
     /// </summary>
-    private static readonly NativeTypes.ResourceHandlerCallbacks Callbacks = CreateCallbacks();
+    private static readonly ObsharpResourceHandlerCallbacks Callbacks = CreateCallbacks();
 
     /// <summary>
     /// 装配回调表。
@@ -87,7 +87,7 @@ internal static unsafe class SchemeHandlerBridge
     /// 集中在一个地方：字段声明处直接写 <c>&amp;OnOpen</c> 也能编过，但可读性差，
     /// 而且以后加回调时容易漏。
     /// </remarks>
-    private static NativeTypes.ResourceHandlerCallbacks CreateCallbacks() => new()
+    private static ObsharpResourceHandlerCallbacks CreateCallbacks() => new()
     {
         User = 0,
         OnOpen = &OnOpen,
@@ -139,7 +139,7 @@ internal static unsafe class SchemeHandlerBridge
                 if (!string.Equals(existing.Address, endpoint.Address, StringComparison.Ordinal) ||
                     existing.Kind != endpoint.Kind)
                 {
-                    NativeLogSink.Write(NativeLogLevel.Warning,
+                    NativeLogSink.Write(AbiLogLevel.Warning,
                         "scheme handler for " + key + " is already registered for endpoint \"" +
                         existing.Address + "\"; ignoring the new endpoint \"" + endpoint.Address + "\"");
                 }
@@ -147,21 +147,19 @@ internal static unsafe class SchemeHandlerBridge
                 return true;
             }
 
-            SafeLog(NativeLogLevel.Debug, "registering the scheme handler for " + key +
+            SafeLog(AbiLogLevel.Debug, "registering the scheme handler for " + key +
                 " (endpoint " + endpoint.Address + ")");
 
-            int result = NativeMethods.obsharp_scheme_register(scheme, domain, in Callbacks);
-            if (result != (int)NativeResult.Ok)
+            if (!Scheme.Register(scheme, domain, in Callbacks))
             {
-                error = "obsharp_scheme_register(" + scheme + ", " + domain + ") failed: " +
-                        (NativeResult)result;
+                error = "obsharp_scheme_register(" + scheme + ", " + domain + ") failed";
                 return false;
             }
 
             Factories[key] = endpoint;
         }
 
-        NativeLogSink.Write(NativeLogLevel.Debug, "scheme handler ready for " + key);
+        NativeLogSink.Write(AbiLogLevel.Debug, "scheme handler ready for " + key);
         return true;
     }
 
@@ -190,8 +188,8 @@ internal static unsafe class SchemeHandlerBridge
     /// 请求到达。返回 0 表示成功（接着走 <see cref="GetResponseHeaders"/>），负数表示失败。
     /// </summary>
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static int OnOpen(nint user, nint handler, byte* method, byte* url, NativeTypes.RequestHeader* headers,
-        int headerCount, void* body, int bodyLength)
+    private static int OnOpen(nint user, nint handler, byte* method, byte* url, ObsharpRequestHeader* headers,
+        int headerCount, nint body, int bodyLength)
     {
         try
         {
@@ -204,7 +202,7 @@ internal static unsafe class SchemeHandlerBridge
             var request = new HttpRequest
             {
                 Method = requestMethod,
-                Body = CopyBytes(body, bodyLength),
+                Body = CopyBytes((void*)body, bodyLength),
             };
 
             for (int i = 0; i < headerCount; i++)
@@ -270,7 +268,7 @@ internal static unsafe class SchemeHandlerBridge
         catch (Exception exception)
         {
             // 异常绝不能穿过原生栈：这里吞掉并让这次请求失败。
-            SafeLog(NativeLogLevel.Error, "scheme handler OnOpen failed: " + exception);
+            SafeLog(AbiLogLevel.Error, "scheme handler OnOpen failed: " + exception);
             Requests.TryRemove(handler, out _);
             return -1;
         }
@@ -288,8 +286,8 @@ internal static unsafe class SchemeHandlerBridge
             {
                 // 状态不在了（被 Cancel/Destroy 抢先清掉）：给一个最小可用的 502，
                 // 让 CEF 有一个确定的响应，而不是拿空响应去渲染。
-                NativeMethods.obsharp_response_set_status(response, 502);
-                NativeMethods.obsharp_response_set_status_text(response, "Bad Gateway");
+                AbiApi.Response(response).SetStatus(502);
+                AbiApi.Response(response).SetStatusText("Bad Gateway");
                 return 0;
             }
 
@@ -300,9 +298,9 @@ internal static unsafe class SchemeHandlerBridge
             if (head.Status == 0)
                 head.Status = 502;
 
-            NativeMethods.obsharp_response_set_status(response, head.Status);
+            AbiApi.Response(response).SetStatus(head.Status);
             if (!string.IsNullOrEmpty(head.StatusText))
-                NativeMethods.obsharp_response_set_status_text(response, head.StatusText);
+                AbiApi.Response(response).SetStatusText(head.StatusText);
 
             SetResponseHeaders(response, head);
 
@@ -317,7 +315,7 @@ internal static unsafe class SchemeHandlerBridge
             {
                 // 去掉 "; charset=utf-8" 这类参数：SetMimeType 只接受类型本身。
                 int semicolon = mime.IndexOf(';');
-                NativeMethods.obsharp_response_set_mime_type(response, semicolon < 0 ? mime : mime[..semicolon]);
+                AbiApi.Response(response).SetMimeType(semicolon < 0 ? mime : mime[..semicolon]);
             }
 
             return head.Framing switch
@@ -330,7 +328,7 @@ internal static unsafe class SchemeHandlerBridge
         }
         catch (Exception exception)
         {
-            SafeLog(NativeLogLevel.Error, "scheme handler GetResponseHeaders failed: " + exception);
+            SafeLog(AbiLogLevel.Error, "scheme handler GetResponseHeaders failed: " + exception);
             return -1;
         }
     }
@@ -339,11 +337,11 @@ internal static unsafe class SchemeHandlerBridge
     /// 读 body。返回实际写入的字节数；0 = 暂时没数据（原生侧挂起）；负数 = body 结束。
     /// </summary>
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static int Read(nint user, nint handler, void* buffer, int size)
+    private static int Read(nint user, nint handler, nint buffer, int size)
     {
         try
         {
-            if (buffer is null)
+            if (buffer is 0)
                 return -1;
 
             if (!Requests.TryGetValue(handler, out NativeRequestState? state))
@@ -353,7 +351,7 @@ internal static unsafe class SchemeHandlerBridge
         }
         catch (Exception exception)
         {
-            SafeLog(NativeLogLevel.Error, "scheme handler Read failed: " + exception);
+            SafeLog(AbiLogLevel.Error, "scheme handler Read failed: " + exception);
             return -1;
         }
     }
@@ -387,7 +385,7 @@ internal static unsafe class SchemeHandlerBridge
         }
         catch (Exception exception)
         {
-            SafeLog(NativeLogLevel.Error, "scheme handler Skip failed: " + exception);
+            SafeLog(AbiLogLevel.Error, "scheme handler Skip failed: " + exception);
             return -1;
         }
     }
@@ -410,7 +408,7 @@ internal static unsafe class SchemeHandlerBridge
         }
         catch (Exception exception)
         {
-            SafeLog(NativeLogLevel.Warning, "scheme handler Cancel failed: " + exception);
+            SafeLog(AbiLogLevel.Warning, "scheme handler Cancel failed: " + exception);
         }
     }
 
@@ -427,7 +425,7 @@ internal static unsafe class SchemeHandlerBridge
         }
         catch (Exception exception)
         {
-            SafeLog(NativeLogLevel.Warning, "scheme handler Destroy failed: " + exception);
+            SafeLog(AbiLogLevel.Warning, "scheme handler Destroy failed: " + exception);
         }
     }
 
@@ -527,7 +525,7 @@ internal static unsafe class SchemeHandlerBridge
     private static void WakeRead(nint handler, NativeRequestState state)
     {
         int available = state.AvailableForResume();
-        NativeMethods.obsharp_resource_handler_resume_read(handler, available);
+        AbiApi.Handler(handler).ResumeRead(available);
     }
 
     /// <summary>
@@ -543,7 +541,7 @@ internal static unsafe class SchemeHandlerBridge
         if (!state.ServicePendingSkip(out long cumulativeSkipped))
             return;
 
-        NativeMethods.obsharp_resource_handler_resume_skip(handler, cumulativeSkipped);
+        AbiApi.Handler(handler).ResumeSkip(cumulativeSkipped);
     }
 
     #endregion
@@ -577,7 +575,7 @@ internal static unsafe class SchemeHandlerBridge
         catch (Exception exception)
         {
             // sink 里抛异常绝不能穿过原生栈（OnOpen 是从 CEF 直接 call 进来的）。
-            SafeLog(NativeLogLevel.Warning, "failed to dispatch a bridge message: " + exception.Message);
+            SafeLog(AbiLogLevel.Warning, "failed to dispatch a bridge message: " + exception.Message);
         }
     }
 
@@ -693,34 +691,44 @@ internal static unsafe class SchemeHandlerBridge
     }
 
     /// <summary>
-    /// 写响应头（滤掉由 CEF 自己管的 framing 头）。
+    /// 写响应头（滤掉由 CEF 自己管的 framing 头，以及不该穿透给 CEF 的缓存头）。
     /// </summary>
     /// <remarks>
+    /// <para>
     /// content-length / connection / transfer-encoding 必须滤掉：body 的分帧已经由
     /// <see cref="Read"/> 的返回值 + <c>GetResponseHeaders</c> 的长度表达，再让 CEF 看到
     /// 原始头，它会按两套互相矛盾的规则去读 body（chunked 的头 + 「长度未知」的返回值）。
+    /// </para>
+    /// <para>
+    /// <b>缓存头同样要滤掉。</b>内容是我们通过 <c>obsharp://</c> 这个自定义 scheme 提供的，
+    /// 新鲜度该由我们决定，不能让上游的语义直接穿透到 CEF。根因在于 ASP.NET 的
+    /// <c>MapStaticAssets</c> 给带指纹的文件名发 <c>Cache-Control: public,max-age=31536000,immutable</c>
+    /// —— 那是「这个 URL 的内容永不改变」的承诺，而 URL 里的指纹是<b>构建时</b>算出来的。
+    /// 实测踩过：某次 <c>blazor.web.*.js</c> 的响应体被截断，坏副本一旦按 immutable 缓存，
+    /// 就再也不会重新请求，页面永久报 <c>SyntaxError</c>，DevTools 的 Sources 里甚至看不到
+    /// 这个文件（因为它根本没走网络），只能手动清 CEF 缓存才能恢复。
+    /// </para>
+    /// <para>
+    /// 处理方式：滤掉全部缓存头，改由这里统一发 <c>no-store</c>。本地 IPC 上省掉一次往返，
+    /// 远不如「看到的一定是当前构建」重要 —— 顺带的好处是改前端资源不必再手动清缓存。
+    /// </para>
     /// </remarks>
     private static void SetResponseHeaders(nint response, HttpResponseHead head)
     {
         var kept = new List<KeyValuePair<string, string>>(head.Headers.Count);
         foreach (KeyValuePair<string, string> header in head.Headers)
         {
-            if (string.Equals(header.Key, "content-length", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(header.Key, "connection", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(header.Key, "transfer-encoding", StringComparison.OrdinalIgnoreCase))
+            if (IsManagedResponseHeader(header.Key))
                 continue;
 
             kept.Add(header);
         }
 
-        if (kept.Count == 0)
-        {
-            // 空数组也要调用一次：原生侧是「整体替换」语义，不调就留着上一次的值。
-            NativeMethods.obsharp_response_set_headers(response, null, 0);
-            return;
-        }
+        // 见上面 remarks。加完之后 kept 至少有两项，不会再为空。
+        kept.Add(new KeyValuePair<string, string>("Cache-Control", "no-store, no-cache, must-revalidate"));
+        kept.Add(new KeyValuePair<string, string>("Pragma", "no-cache"));
 
-        NativeTypes.RequestHeader* headers = stackalloc NativeTypes.RequestHeader[kept.Count];
+        ObsharpRequestHeader[] headers = new ObsharpRequestHeader[kept.Count];
         nint* blocks = stackalloc nint[kept.Count * 2];
         int allocated = 0;
 
@@ -735,7 +743,7 @@ internal static unsafe class SchemeHandlerBridge
                 blocks[allocated++] = valueBlock;
             }
 
-            NativeMethods.obsharp_response_set_headers(response, headers, kept.Count);
+            AbiApi.Response(response).SetHeaders(headers);
         }
         finally
         {
@@ -764,6 +772,36 @@ internal static unsafe class SchemeHandlerBridge
         destination[byteCount] = 0;
         return destination;
     }
+
+    /// <summary>
+    /// 这个响应头是否由我们接管、不该原样交给 CEF。
+    /// </summary>
+    /// <remarks>
+    /// 分两类：
+    /// <list type="bullet">
+    /// <item>
+    /// <b>framing</b>（content-length / connection / transfer-encoding）：body 的分帧由
+    /// <see cref="Read"/> 的返回值 + <c>GetResponseHeaders</c> 的长度表达，重复告诉 CEF
+    /// 会让它按矛盾的规则读 body。
+    /// </item>
+    /// <item>
+    /// <b>缓存</b>（cache-control / pragma / expires / etag / last-modified / age）：
+    /// 这个 scheme 的内容由我们自己提供，新鲜度必须由我们决定（详见
+    /// <see cref="SetResponseHeaders"/>）。尤其是 <c>immutable</c> —— 一旦某个坏副本
+    /// 被缓存，URL 不变就永远不会重新请求。
+    /// </item>
+    /// </list>
+    /// </remarks>
+    private static bool IsManagedResponseHeader(string name)
+        => name.Equals("content-length", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("connection", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("transfer-encoding", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("cache-control", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("pragma", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("expires", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("etag", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("last-modified", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("age", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// 读一个 NUL 结尾的 UTF-8 借用指针；空指针返回 <see langword="null"/>。
@@ -802,13 +840,13 @@ internal static unsafe class SchemeHandlerBridge
         if (!string.IsNullOrEmpty(error))
             text += " (" + error + ")";
 
-        SafeLog(error is null ? NativeLogLevel.Info : NativeLogLevel.Warning, text);
+        SafeLog(error is null ? AbiLogLevel.Info : AbiLogLevel.Warning, text);
     }
 
     /// <summary>
     /// 写日志，但不让「日志本身」把请求弄挂（原生库没加载、日志系统未初始化都可能抛）。
     /// </summary>
-    private static void SafeLog(NativeLogLevel level, string message)
+    private static void SafeLog(AbiLogLevel level, string message)
     {
         try
         {

@@ -10,6 +10,8 @@ using Microsoft.Extensions.Logging;
 using OBSharp.Interop;
 using OBSharp.Runtime;
 
+using Host = Microsoft.Extensions.Hosting.Host;
+
 namespace OBSharp;
 
 public static partial class OBSModule

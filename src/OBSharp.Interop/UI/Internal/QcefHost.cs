@@ -1,4 +1,4 @@
-using OBSharp.Interop.Native;
+using OBSharp.Interop.Abi;
 
 namespace OBSharp.Interop.UI.Internal;
 
@@ -136,12 +136,12 @@ internal static unsafe class QcefHost
                 return null;
 
             // libobs 的符号：优先从模块句柄里找，找不到模块就退回「按进程全局找」
-            // （NativeApi.FindSymbol(0, ...) 对应 dlsym(RTLD_DEFAULT) / 主程序）。
+            // （AbiApi.FindSymbol(0, ...) 对应 dlsym(RTLD_DEFAULT) / 主程序）。
             // libobs 静态链进主程序时根本没有独立模块句柄，这一步就是为那种情况留的。
             nint libobs = FindLibObsModule();
 
-            var getModule = (delegate* unmanaged[Cdecl]<nint, nint>)NativeApi.FindSymbol(libobs, "obs_get_module");
-            var getModuleLib = (delegate* unmanaged[Cdecl]<nint, nint>)NativeApi.FindSymbol(libobs, "obs_get_module_lib");
+            var getModule = (delegate* unmanaged[Cdecl]<nint, nint>)AbiApi.FindSymbol(libobs, "obs_get_module");
+            var getModuleLib = (delegate* unmanaged[Cdecl]<nint, nint>)AbiApi.FindSymbol(libobs, "obs_get_module_lib");
             if (getModule is null || getModuleLib is null)
             {
                 error = "libobs (obs_get_module / obs_get_module_lib) is not loaded in this process";
@@ -172,7 +172,7 @@ internal static unsafe class QcefHost
             }
 
             // 工厂函数：每次调用会建一个新的 QCef。正常只调一次（结果缓存起来）。
-            var createQCef = (delegate* unmanaged[Cdecl]<nint>)NativeApi.FindSymbol(obsBrowserLib, "obs_browser_create_qcef");
+            var createQCef = (delegate* unmanaged[Cdecl]<nint>)AbiApi.FindSymbol(obsBrowserLib, "obs_browser_create_qcef");
             if (createQCef is null)
             {
                 error = "obs-browser does not export obs_browser_create_qcef (too old?)";
@@ -189,7 +189,7 @@ internal static unsafe class QcefHost
             // 版本号是可选符号：老 obs-browser 没有它，那种情况下 Version = 0，
             // 上层只能用「0 表示未知」这个约定，不能拿它去跑版本比较。
             int version = 0;
-            var versionFn = (delegate* unmanaged[Cdecl]<int>)NativeApi.FindSymbol(obsBrowserLib, "obs_browser_qcef_version_export");
+            var versionFn = (delegate* unmanaged[Cdecl]<int>)AbiApi.FindSymbol(obsBrowserLib, "obs_browser_qcef_version_export");
             if (versionFn is not null)
                 version = versionFn();
 
@@ -227,7 +227,7 @@ internal static unsafe class QcefHost
     {
         if (OperatingSystem.IsLinux())
         {
-            var getNixPlatform = (delegate* unmanaged[Cdecl]<int>)NativeApi.FindSymbol(0, "obs_get_nix_platform");
+            var getNixPlatform = (delegate* unmanaged[Cdecl]<int>)AbiApi.FindSymbol(0, "obs_get_nix_platform");
             if (getNixPlatform is not null && getNixPlatform() == 2)
             {
                 error = "browser panels are disabled by obs-browser on Wayland";
@@ -261,7 +261,7 @@ internal static unsafe class QcefHost
 
         foreach (string candidate in candidates)
         {
-            nint module = NativeApi.FindModule(candidate);
+            nint module = AbiApi.FindModule(candidate);
             if (module != 0)
                 return module;
         }

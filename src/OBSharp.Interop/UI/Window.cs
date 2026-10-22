@@ -4,7 +4,8 @@ using System.Runtime.InteropServices;
 
 using Microsoft.Extensions.Logging;
 
-using OBSharp.Interop.Native;
+using OBSharp.Interop.Abi;
+using WindowFactory = global::OBSharp.Interop.Window;
 
 namespace OBSharp.Interop.UI;
 
@@ -23,7 +24,7 @@ namespace OBSharp.Interop.UI;
 /// 要真正销毁请调 <see cref="Dispose"/>（它不会销毁里面的浏览器）。
 /// </para>
 /// <para>
-/// 所有会碰 Qt 的调用都经 <see cref="NativeApi.InvokeUI"/> 切主线程（已经在主线程时是
+/// 所有会碰 Qt 的调用都经 <see cref="AbiApi.InvokeUI"/> 切主线程（已经在主线程时是
 /// 直调），调用方不用自己判线程。
 /// </para>
 /// <para>
@@ -102,7 +103,7 @@ public partial class Window : IDisposable
     /// </summary>
     /// <remarks>
     /// 这是唯一一个「读」操作：原生侧 <c>obsharp_widget_is_visible()</c> 要求 Qt 主线程，
-    /// 所以仍然要过一次 <see cref="NativeApi.InvokeUI"/>，把结果带回调用线程。
+    /// 所以仍然要过一次 <see cref="AbiApi.InvokeUI"/>，把结果带回调用线程。
     /// 读不到时返回 <see langword="false"/> 而不是抛异常 —— 这是个属性，
     /// 旧版（直接 P/Invoke 拿 <c>int32_t</c>）也从不抛，保持这个约定。
     /// </remarks>
@@ -116,7 +117,7 @@ public partial class Window : IDisposable
             bool visible = false;
             try
             {
-                NativeErrors.RunUI(() => visible = NativeMethods.obsharp_widget_is_visible(_native));
+                NativeErrors.RunUI(() => visible = AbiApi.Widget(_native).IsVisible());
             }
             catch (OBSharpNativeException exception)
             {
@@ -162,13 +163,7 @@ public partial class Window : IDisposable
         {
             NativeErrors.RunUI(() =>
             {
-                NativeTypes.WindowCallbacks callbacks = new()
-                {
-                    User = (nint)_callbackId,
-                    OnCloseRequested = &OnCloseRequested,
-                };
-
-                created = NativeMethods.obsharp_window_create(in callbacks);
+                created = AbiApi.Detach(WindowFactory.Create(s_onCloseRequested, (nint)_callbackId));
 
                 // 建窗口是本类的全部意义，拿不到就没有可用的对象，直接失败。
                 // （旧版这里返回 0 之后所有方法都退化成 no-op，问题是调用方完全看不出
@@ -182,24 +177,24 @@ public partial class Window : IDisposable
 
                 // 标题：空 / null 时不设，保持 Qt 默认（旧实现同样只在非空时 setWindowTitle）。
                 if (!string.IsNullOrEmpty(options.Title))
-                    NativeMethods.obsharp_widget_set_window_title(created, options.Title);
+                    AbiApi.Widget(created).SetWindowTitle(options.Title);
 
                 // 可缩放 → resize()；固定尺寸 → setFixedSize()。
                 // 旧实现的语义就是这两条二选一，这里照搬（不是 resize 之后再锁）。
                 if (options.Resizable)
-                    NativeMethods.obsharp_widget_resize(created, width, height);
+                    AbiApi.Widget(created).Resize(width, height);
                 else
-                    NativeMethods.obsharp_widget_set_fixed_size(created, width, height);
+                    AbiApi.Widget(created).SetFixedSize(width, height);
 
                 // 置顶：Qt::WindowStaysOnTopHint。用 Qt::Window 而不是 Qt::Tool
                 // 是为了在 Windows 上进任务栏、进 Alt+Tab（见旧 Window.cpp 的注释）。
                 if (options.Topmost)
-                    NativeMethods.obsharp_widget_set_topmost(created, true);
+                    AbiApi.Widget(created).SetWindowFlag(Qt.WindowType.WindowStaysOnTopHint, true);
 
                 // 原生侧的 obsharp_widget_show 已经是 show() + raise()，一次就够
                 // （旧 PlainWindow::Show() 也是这两句）。
                 if (options.Visible)
-                    NativeMethods.obsharp_widget_show(created);
+                    AbiApi.Widget(created).Show();
 
                 // 标题里的 (none) 约定沿用旧日志：排查「窗口标题不对」时一眼能看出是没给还是给错。
                 LogWindowCreated(
@@ -236,7 +231,7 @@ public partial class Window : IDisposable
 
         return Forward(() =>
         {
-            NativeMethods.obsharp_widget_set_content(_native, content);
+            AbiApi.Widget(_native).SetContent(content is 0 ? null : AbiApi.Widget(content));
             _content = content;
         });
     }
@@ -244,18 +239,18 @@ public partial class Window : IDisposable
     /// <summary>
     /// 显示窗口。
     /// </summary>
-    public virtual int Show() => Forward(() => NativeMethods.obsharp_widget_show(_native));
+    public virtual int Show() => Forward(() => AbiApi.Widget(_native).Show());
 
     /// <summary>
     /// 隐藏窗口。
     /// </summary>
-    public virtual int Hide() => Forward(() => NativeMethods.obsharp_widget_hide(_native));
+    public virtual int Hide() => Forward(() => AbiApi.Widget(_native).Hide());
 
     /// <summary>
     /// 设置窗口标题。
     /// </summary>
     public int SetTitle(string? title)
-        => Forward(() => NativeMethods.obsharp_widget_set_window_title(_native, title));
+        => Forward(() => AbiApi.Widget(_native).SetWindowTitle(title));
 
     /// <summary>
     /// 设置窗口大小。
@@ -272,9 +267,9 @@ public partial class Window : IDisposable
             throw NativeErrors.Create(OBSharpResult.InvalidArgument, "The window width and height must be positive.");
 
         if (_fixedSize)
-            NativeMethods.obsharp_widget_set_fixed_size(_native, width, height);
+            AbiApi.Widget(_native).SetFixedSize(width, height);
         else
-            NativeMethods.obsharp_widget_resize(_native, width, height);
+            AbiApi.Widget(_native).Resize(width, height);
     });
 
     /// <summary>
@@ -308,8 +303,10 @@ public partial class Window : IDisposable
         }
     }
 
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static void OnCloseRequested(nint id)
+    // 委托实例静态持有：原生侧长期持有它。
+    private static readonly global::OBSharp.Interop.ObsharpWindowCloseCallback s_onCloseRequested = OnCloseRequested;
+
+    private static void OnCloseRequested(nint nativeWindow, nint id)
     {
         if (!s_callbacks.TryGetValue((long)id, out WeakReference<Window>? reference) ||
             !reference.TryGetTarget(out Window? window))
@@ -360,7 +357,7 @@ public partial class Window : IDisposable
 
         try
         {
-            NativeApi.InvokeUI(() =>
+            AbiApi.InvokeUI(() =>
             {
                 // 先把内容从布局里摘掉，但**不**销毁它（内容归 WebView 所有，
                 // 谁先销毁由调用方决定 —— PluginManagerWindow 的 OnClosing 就是
@@ -370,15 +367,15 @@ public partial class Window : IDisposable
                 // **不**会把子 widget 的 parent 置空。所以调用方即使漏了这一步，
                 // WebView.Dispose() 里的 obsharp_widget_parent() 判据照样成立（有父级 → 只 hide），
                 // 不会二次释放 —— 宁可漏一个 widget，也不能把 OBS 手里的指针删掉。
-                NativeMethods.obsharp_widget_set_content(_native, 0);
-                NativeMethods.obsharp_widget_hide(_native);
+                AbiApi.Widget(_native).SetContent(null);
+                AbiApi.Widget(_native).Hide();
 
                 // deleteLater()：推迟到事件循环里销毁。绝不能在 Qt 正在派发事件的栈上
                 // 直接 delete（比如在 closeEvent 回调里销毁窗口），那是崩溃。
-                NativeMethods.obsharp_widget_delete_later(_native);
+                AbiApi.DestroyWidget(_native);
             });
         }
-        catch (Exception exception) when (exception is OBSharpNativeException or NativeException)
+        catch (Exception exception) when (exception is OBSharpNativeException or AbiException)
         {
             // 析构路径不能抛（finalizer 线程抛异常会直接终止进程），也不该因为
             // 「Qt 已经没了」让调用方的 Dispose 失败。记一笔就够了。

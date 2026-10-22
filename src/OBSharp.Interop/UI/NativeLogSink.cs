@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Logging;
 
-using OBSharp.Interop.Native;
+using OBSharp.Interop.Abi;
 
 namespace OBSharp.Interop.UI;
 
@@ -10,7 +10,7 @@ namespace OBSharp.Interop.UI;
 /// <remarks>
 /// <para>
 /// The native library never resolves libobs' <see cref="object.ToString"/>-style logging itself.
-/// It calls the function pointer installed by <see cref="NativeApi.InstallLogSink"/>, which lands
+/// It calls the function pointer installed by <see cref="AbiApi.InstallLogSink"/>, which lands
 /// here. That keeps "where do log lines go" in managed code, next to the
 /// <see cref="ILogger"/> and its filters.
 /// </para>
@@ -21,13 +21,13 @@ namespace OBSharp.Interop.UI;
 /// Message text arrives pre-formatted from the native side, so every
 /// <see cref="LoggerMessageAttribute"/> here takes the whole line as a single <c>{Message}</c>
 /// placeholder. Level dispatch is an explicit switch because the native levels mirror libobs'
-/// <see cref="NativeLogLevel"/> constants and do not line up with <see cref="LogLevel"/>.
+/// <see cref="AbiLogLevel"/> constants and do not line up with <see cref="LogLevel"/>.
 /// </para>
 /// </remarks>
 internal static partial class NativeLogSink
 {
     /// <summary>Guards <see cref="_logger"/>: the native side logs from any thread.</summary>
-    private static readonly object Gate = new();
+    private static readonly Lock Gate = new();
 
     /// <summary>Current sink; <see langword="null"/> until <see cref="Install"/> runs.</summary>
     private static ILogger? _logger;
@@ -61,15 +61,15 @@ internal static partial class NativeLogSink
         // Install the native callback once, before the first native log line can be produced.
         // A missing native library is a real failure here (the caller is about to P/Invoke it
         // anyway), so let the exception surface instead of hiding it.
-        NativeApi.InstallLogSink();
+        AbiApi.InstallLogSink();
 
         lock (Gate)
         {
             _logger = logger;
 
-            // The native library calls back through NativeApi; point it here. Idempotent —
+            // The native library calls back through Abi; point it here. Idempotent —
             // assigning the same delegate again is harmless.
-            NativeApi.LogSink = Write;
+            AbiApi.LogSink = Write;
         }
     }
 
@@ -79,10 +79,10 @@ internal static partial class NativeLogSink
     /// <param name="level">Severity chosen by the native side.</param>
     /// <param name="message">The already-formatted message.</param>
     /// <remarks>
-    /// Called from the unmanaged callback in <see cref="NativeApi"/>, i.e. on whatever thread
+    /// Called from the unmanaged callback in <see cref="Abi"/>, i.e. on whatever thread
     /// the native library happens to be running. Nothing here may throw.
     /// </remarks>
-    internal static void Write(NativeLogLevel level, string message)
+    internal static void Write(AbiLogLevel level, string message)
     {
         ILogger? logger;
         lock (Gate)
@@ -97,19 +97,19 @@ internal static partial class NativeLogSink
 
         switch (level)
         {
-            case NativeLogLevel.Error:
+            case AbiLogLevel.Error:
                 LogNativeError(logger, message);
                 break;
 
-            case NativeLogLevel.Warning:
+            case AbiLogLevel.Warning:
                 LogNativeWarning(logger, message);
                 break;
 
-            case NativeLogLevel.Debug:
+            case AbiLogLevel.Debug:
                 LogNativeDebug(logger, message);
                 break;
 
-            case NativeLogLevel.Info:
+            case AbiLogLevel.Info:
             default:
                 LogNativeInformation(logger, message);
                 break;
@@ -121,16 +121,16 @@ internal static partial class NativeLogSink
     /// Used by types that have no <see cref="ILogger"/> of their own (the static bridge and the
     /// static file picker). Routes through the same sink so every line still lands in one place.
     /// </remarks>
-    internal static void WriteInformation(string message) => Write(NativeLogLevel.Info, message);
+    internal static void WriteInformation(string message) => Write(AbiLogLevel.Info, message);
 
     /// <summary>Writes a warning-level line that originated in managed code.</summary>
-    internal static void WriteWarning(string message) => Write(NativeLogLevel.Warning, message);
+    internal static void WriteWarning(string message) => Write(AbiLogLevel.Warning, message);
 
     /// <summary>Writes a debug-level line that originated in managed code.</summary>
-    internal static void WriteDebug(string message) => Write(NativeLogLevel.Debug, message);
+    internal static void WriteDebug(string message) => Write(AbiLogLevel.Debug, message);
 
     /// <summary>Writes an error-level line that originated in managed code.</summary>
-    internal static void WriteError(string message) => Write(NativeLogLevel.Error, message);
+    internal static void WriteError(string message) => Write(AbiLogLevel.Error, message);
 
     /// <summary>Writes one line from the native library at error level.</summary>
     [LoggerMessage(LogLevel.Error, "Native: {Message}")]

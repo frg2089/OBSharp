@@ -1,4 +1,4 @@
-using OBSharp.Interop.Native;
+using OBSharp.Interop.Abi;
 
 namespace OBSharp.Interop.UI;
 
@@ -37,7 +37,7 @@ internal static class ParentResolver
         // 也是 #ifdef Q_OS_WIN 包起来的。
         if (OperatingSystem.IsWindows())
         {
-            nint found = NativeMethods.obsharp_widget_find((nuint)parent);
+            nint found = QWidget.Find((nuint)parent)?.DangerousGetHandle() ?? 0;
             if (found is not 0)
                 return found;
         }

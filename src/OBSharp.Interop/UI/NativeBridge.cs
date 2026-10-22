@@ -1,5 +1,5 @@
 using OBSharp.Interop.UI.Internal;
-using OBSharp.Interop.Native;
+using OBSharp.Interop.Abi;
 
 namespace OBSharp.Interop.UI;
 
@@ -13,7 +13,7 @@ namespace OBSharp.Interop.UI;
 /// <c>probe_endpoint</c>），原生库里各有对应实现。
 /// </para>
 /// <para>
-/// 新 ABI 把这些拆开了：版本号 / 线程判断 / 主线程封送是<b>通用原语</b>（<see cref="NativeApi"/>），
+/// 新 ABI 把这些拆开了：版本号 / 线程判断 / 主线程封送是<b>通用原语</b>（<see cref="Abi"/>），
 /// 而「obs-browser 面板在不在」「这个端点连不连得上」属于<b>业务判断</b>，所以搬到了
 /// <see cref="OBSharp.Interop.UI.Internal"/> 命名空间下的
 /// <see cref="QcefPanel"/> / <see cref="EndpointResolver"/>。
@@ -36,13 +36,13 @@ internal static partial class NativeBridge
     /// <summary>
     /// 原生库的版本串
     /// </summary>
-    public static string Version => NativeApi.Version;
+    public static string Version => AbiApi.Version;
 
 
     /// <summary>
     /// 当前线程是不是 Qt 主线程。
     /// </summary>
-    public static bool IsUIThread => NativeApi.IsUIThread;
+    public static bool IsUIThread => AbiApi.IsUIThread;
 
     /// <summary>
     /// 初始化：解析 obs-browser 面板接口，并让 obs-browser 自己把 CEF 拉起来。
@@ -103,7 +103,7 @@ internal static partial class NativeBridge
 
             NativeLogSink.WriteDebug("Calling QCef::init_browser()");
 
-            if (!NativeMethods.obsharp_qcef_init_browser(panel.Cef))
+            if (!AbiApi.Cef(panel.Cef).InitBrowser())
             {
                 throw NativeErrors.Create(
                     OBSharpResult.BrowserUnavailable,
@@ -118,11 +118,11 @@ internal static partial class NativeBridge
     /// 在 Qt 主线程上同步执行 <paramref name="action"/>（已经在主线程时直调）。
     /// </summary>
     /// <remarks>
-    /// 底下就是 <see cref="NativeApi.InvokeUI"/>：它自己判线程、自己管
+    /// 底下就是 <see cref="AbiApi.InvokeUI"/>：它自己判线程、自己管
     /// <c>GCHandle</c>、把回调里抛的异常搬回调用线程重抛。这里保留一个同名入口，
     /// 是因为本程序集里所有「碰 Qt」的地方都走它，将来换实现只改一处。
     /// </remarks>
-    public static void InvokeUI(Action action) => NativeErrors.Run(() => NativeApi.InvokeUI(action));
+    public static void InvokeUI(Action action) => NativeErrors.Run(() => AbiApi.InvokeUI(action));
 
     /// <summary>
     /// 探测 endpoint 是否可连接。

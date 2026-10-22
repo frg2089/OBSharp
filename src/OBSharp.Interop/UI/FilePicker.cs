@@ -1,7 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-using OBSharp.Interop.Native;
+using OBSharp.Interop.Abi;
 
 using Microsoft.Extensions.Logging;
 
@@ -41,16 +41,16 @@ public static unsafe partial class FilePicker
     /// <summary>
     /// <c>QFileDialog::AcceptMode</c>，按 Qt 的枚举顺序（顺序不能改）。
     /// </summary>
-    private const NativeFileDialogAcceptMode AcceptOpen = NativeFileDialogAcceptMode.Open;
-    private const NativeFileDialogAcceptMode AcceptSave = NativeFileDialogAcceptMode.Save;
+    private const QFileDialog.AcceptMode AcceptOpen = QFileDialog.AcceptMode.AcceptOpen;
+    private const QFileDialog.AcceptMode AcceptSave = QFileDialog.AcceptMode.AcceptSave;
 
     /// <summary>
     /// <c>QFileDialog::FileMode</c>，按 Qt 的枚举顺序（顺序不能改）。
     /// </summary>
-    private const NativeFileDialogFileMode FileModeExistingFile = NativeFileDialogFileMode.ExistingFile;
-    private const NativeFileDialogFileMode FileModeExistingFiles = NativeFileDialogFileMode.ExistingFiles;
-    private const NativeFileDialogFileMode FileModeAnyFile = NativeFileDialogFileMode.AnyFile;
-    private const NativeFileDialogFileMode FileModeDirectory = NativeFileDialogFileMode.Directory;
+    private const QFileDialog.FileMode FileModeExistingFile = QFileDialog.FileMode.ExistingFile;
+    private const QFileDialog.FileMode FileModeExistingFiles = QFileDialog.FileMode.ExistingFiles;
+    private const QFileDialog.FileMode FileModeAnyFile = QFileDialog.FileMode.AnyFile;
+    private const QFileDialog.FileMode FileModeDirectory = QFileDialog.FileMode.Directory;
 
     /// <summary>
     /// 打开文件。取消时 <see cref="FilePickerResult.Canceled"/> 为
@@ -131,25 +131,22 @@ public static unsafe partial class FilePicker
                     // 在 Windows 上会跑到主窗口后面去，用户会以为程序卡住了。
                     nint parent = ParentResolver.Resolve(options?.ParentWidget ?? 0);
                     if (parent is 0)
-                        parent = NativeMethods.obsharp_active_window();
+                        parent = Application.ActiveWindow()?.DangerousGetHandle() ?? 0;
 
-                    dialog = NativeMethods.obsharp_file_dialog_create(parent);
+                    dialog = AbiApi.Detach(QFileDialog.Create(AbiApi.Widget(parent)));
                     if (dialog is 0)
                     {
                         throw NativeErrors.Create(
                             OBSharpResult.Internal,
-                            "obsharp_file_dialog_create() returned a null handle: could not create the QFileDialog.");
+                            "QFileDialog.Create() returned a null handle: could not create the QFileDialog.");
                     }
 
                     Configure(dialog, kind, options, allowMultiple);
 
                     nint user = GCHandle.ToIntPtr(state.Handle);
-                    int result = NativeMethods.obsharp_file_dialog_open(dialog, &OnPickerDone, user);
-                    NativeException.ThrowIfFailed(
-                        result, "obsharp_file_dialog_open() failed: the dialog could not be shown.");
+                    AbiApi.Dialog(dialog).Show(s_onPickerDone, user);
 
-                    // open() 成功之后对话框的所有权转到原生侧，它会 deleteLater 掉，
-                    // 这边不能再碰 dialog（包括下面 catch 里的清理）。
+                    // 对话框的所有权始终在我们手里：finished 回调里收割结果后销毁。
                     started = true;
 
                     if (logger is not null)
@@ -159,9 +156,8 @@ public static unsafe partial class FilePicker
                 {
                     if (!started && dialog is not 0)
                     {
-                        // open() 没成功：对话框还归我们。新 ABI 没有专门的 destroy 导出，
-                        // 但 QFileDialog 本身就是 QWidget，用 widget 的 deleteLater 收掉是对的
-                        // —— 不这么做就是每失败一次漏一个窗口对象。
+                        // open() 没成功：对话框还归我们。obsharp_widget_destroy 内部就是
+                        // deleteLater，事件派发栈上收也安全。
                         ClientOwnedDialogCleanup(dialog);
                     }
 
@@ -201,47 +197,48 @@ public static unsafe partial class FilePicker
     /// </remarks>
     private static void Configure(nint dialog, PickerKind kind, FilePickerOptions? options, bool allowMultiple)
     {
+        var dlg = AbiApi.Dialog(dialog);
+
         // 空串一律不设：Qt 对空标题 / 空目录有自己的默认行为（继承上次访问的位置），
         // 显式设成空串反而会把它清掉。
         if (!string.IsNullOrEmpty(options?.Title))
-            NativeMethods.obsharp_file_dialog_set_title(dialog, options.Title);
+            dlg.SetWindowTitle(options.Title);
 
         if (!string.IsNullOrEmpty(options?.Directory))
-            NativeMethods.obsharp_file_dialog_set_directory(dialog, options.Directory);
+            dlg.SetDirectory(options.Directory);
 
         string? filter = BuildFilter(options?.Filters);
         if (!string.IsNullOrEmpty(filter))
-            NativeMethods.obsharp_file_dialog_set_name_filter(dialog, filter);
+            dlg.SetNameFilter(filter);
 
-        // 隐藏文件：原生侧负责把 QDir::Hidden | QDir::System 或到现有的 filter() 上，
+        // 隐藏文件：把 QDir::Hidden | QDir::System 或到现有的 filter() 上，
         // 必须在 setNameFilter 之后调（filter() 是从 name filters 推出来的）——
         // 顺序跟旧 FilePicker.cpp 保持一致。
         if (options?.ShowHiddenFiles == true)
-            NativeMethods.obsharp_file_dialog_set_show_hidden(dialog, true);
+            dlg.SetFilter(dlg.GetFilter() | QDir.Filter.Hidden | QDir.Filter.System);
 
         switch (kind)
         {
             case PickerKind.Open:
-                NativeMethods.obsharp_file_dialog_set_accept_mode(dialog, AcceptOpen);
-                NativeMethods.obsharp_file_dialog_set_file_mode(
-                    dialog, allowMultiple ? FileModeExistingFiles : FileModeExistingFile);
+                dlg.SetAcceptMode(AcceptOpen);
+                dlg.SetFileMode(allowMultiple ? FileModeExistingFiles : FileModeExistingFile);
                 break;
 
             case PickerKind.Save:
-                NativeMethods.obsharp_file_dialog_set_accept_mode(dialog, AcceptSave);
+                dlg.SetAcceptMode(AcceptSave);
                 // 保存对话框必须是 AnyFile：文件还不存在，用 ExistingFile 会让「保存」
                 // 按钮永远灰着。
-                NativeMethods.obsharp_file_dialog_set_file_mode(dialog, FileModeAnyFile);
+                dlg.SetFileMode(FileModeAnyFile);
 
                 // 后缀只在保存时有意义（打开时用户选的是已有文件，补后缀没有意义）。
                 if (!string.IsNullOrEmpty(options?.DefaultSuffix))
-                    NativeMethods.obsharp_file_dialog_set_default_suffix(dialog, options.DefaultSuffix);
+                    dlg.SetDefaultSuffix(options.DefaultSuffix);
                 break;
 
             case PickerKind.Folder:
-                NativeMethods.obsharp_file_dialog_set_accept_mode(dialog, AcceptOpen);
-                NativeMethods.obsharp_file_dialog_set_file_mode(dialog, FileModeDirectory);
-                NativeMethods.obsharp_file_dialog_set_show_dirs_only(dialog, true);
+                dlg.SetAcceptMode(AcceptOpen);
+                dlg.SetFileMode(FileModeDirectory);
+                dlg.SetOptions(dlg.GetOptions() | QFileDialog.Option.ShowDirsOnly);
                 break;
 
             default:
@@ -251,7 +248,7 @@ public static unsafe partial class FilePicker
         // 选择文件夹时不预填文件名：Qt 会把 filename 当成「要选中的子项」，
         // 在纯目录对话框里没有意义（旧实现同样跳过了这一条）。
         if (kind is not PickerKind.Folder && !string.IsNullOrEmpty(options?.FileName))
-            NativeMethods.obsharp_file_dialog_select_file(dialog, options.FileName);
+            dlg.SelectFile(options.FileName);
     }
 
     /// <summary>
@@ -267,14 +264,14 @@ public static unsafe partial class FilePicker
     {
         try
         {
-            NativeMethods.obsharp_widget_delete_later(dialog);
+            AbiApi.DestroyWidget(dialog);
         }
-        catch (NativeException exception)
+        catch (AbiException exception)
         {
-            // Teardown must not mask the real failure, but it must not vanish either:
-            // a leaked QFileDialog shows up as a stuck dialog later.
+            // 清理不能盖掉真正的失败，但也不能悄悄没了：
+            // 泄漏的 QFileDialog 之后会以「卡住的对话框」的形式冒出来。
             NativeLogSink.Write(
-                NativeLogLevel.Warning,
+                AbiLogLevel.Warning,
                 "Failed to release the file dialog after a failure: " + exception.Message);
         }
     }
@@ -293,7 +290,7 @@ public static unsafe partial class FilePicker
         if (filters is null || filters.Length is 0)
             return null;
 
-        List<string> groups = new(filters.Length);
+        List<string> groups = [with(filters.Length)];
 
         foreach (string? filter in filters)
         {
@@ -335,13 +332,7 @@ public static unsafe partial class FilePicker
         if (cancelled || dialog is 0)
             return new FilePickerResult { Canceled = true };
 
-        int count = NativeMethods.obsharp_file_dialog_selected_count(dialog);
-        if (count <= 0)
-            return new FilePickerResult { Canceled = true };
-
-        string[] paths = new string[count];
-        for (int i = 0; i < count; i++)
-            paths[i] = NativeMethods.obsharp_file_dialog_selected_path(dialog, i) ?? string.Empty;
+        string[] paths = AbiApi.Dialog(dialog).GetSelectedFiles();
 
         return new FilePickerResult
         {
@@ -350,8 +341,10 @@ public static unsafe partial class FilePicker
         };
     }
 
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static void OnPickerDone(nint user, nint dialog, byte cancelled)
+    /// <summary>finished 回调委托，静态持有：原生侧长期持有。</summary>
+    private static readonly ObsharpFilepickerFinishedCallback s_onPickerDone = OnPickerDone;
+
+    private static void OnPickerDone(nint dialog, int result, nint user)
     {
         GCHandle handle = GCHandle.FromIntPtr(user);
         if (handle.Target is not PickerState state)
@@ -359,7 +352,8 @@ public static unsafe partial class FilePicker
 
         try
         {
-            state.Completion.TrySetResult(ReadResult(dialog, cancelled is not 0));
+            // QDialog::DialogCode：0 = Accepted，1 = Rejected。
+            state.Completion.TrySetResult(ReadResult(dialog, result is not 0));
         }
         catch (Exception exception)
         {
@@ -368,9 +362,10 @@ public static unsafe partial class FilePicker
         }
         finally
         {
-            // 原生侧保证每次 open 恰好回调一次，所以这里释放句柄是安全的；
-            // 释放之后即使再有回调（不应该有）也查不到 state，直接返回。
+            // 原生侧保证每次 show 恰好回调一次，所以这里释放句柄、销毁对话框是安全的；
+            // 之后即使再有回调（不应该有）也查不到 state，直接返回。
             handle.Free();
+            ClientOwnedDialogCleanup(dialog);
         }
     }
 

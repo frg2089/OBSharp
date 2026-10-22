@@ -14,12 +14,6 @@ namespace OBSharp;
 /// </summary>
 internal sealed class ObsLogger(string pluginId, string categoryName, IExternalScopeProvider scopes) : ILogger
 {
-    // libobs 的 log level（blog 的第一个参数）：LOG_ERROR / LOG_WARNING / LOG_INFO / LOG_DEBUG / LOG_LOG。
-    private const int ObsLogError = 100;
-    private const int ObsLogWarning = 200;
-    private const int ObsLogInfo = 300;
-    private const int ObsLogDebug = 400;
-
     // 过滤是 LoggerFactory 按 Logging:LogLevel 做掉的，到这里就写。
     public bool IsEnabled(LogLevel logLevel) => true;
 
@@ -32,18 +26,18 @@ internal sealed class ObsLogger(string pluginId, string categoryName, IExternalS
         Exception? exception,
         Func<TState, Exception?, string> formatter)
     {
-        int obsLogLevel = logLevel switch
+        ObsLogLevel obsLogLevel = logLevel switch
         {
-            LogLevel.Trace => 500,
-            LogLevel.Debug => ObsLogDebug,
-            LogLevel.Information => ObsLogInfo,
-            LogLevel.Warning => ObsLogWarning,
-            LogLevel.Error => ObsLogError,
-            LogLevel.Critical => 50,
-            _ => -1,
+            LogLevel.Trace => (ObsLogLevel)500,
+            LogLevel.Debug => ObsLogLevel.LOG_DEBUG,
+            LogLevel.Information => ObsLogLevel.LOG_INFO,
+            LogLevel.Warning => ObsLogLevel.LOG_WARNING,
+            LogLevel.Error => ObsLogLevel.LOG_ERROR,
+            LogLevel.Critical => (ObsLogLevel)50,
+            _ => (ObsLogLevel)(-1),
         };
 
-        if (obsLogLevel is -1)
+        if (obsLogLevel is (ObsLogLevel)(-1))
             return;
 
         string level = logLevel switch
