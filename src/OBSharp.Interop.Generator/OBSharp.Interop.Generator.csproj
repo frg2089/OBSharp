@@ -2,7 +2,28 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <AssemblyName>OBSharp.Interop.Generator</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>OBSharp.Interop.Generator</RootNamespace>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ClangSharp" />
+    <PackageReference Include="DotMake.CommandLine" />
+    <PackageReference Include="Humanizer.Core" />
+  </ItemGroup>
+
+  <!--
+    libclang 是 meta 包（只有 runtime.json）：不带 RID 构建时原生库不会进输出目录，
+    这里显式把当前平台的 libclang.dll 拷到 bin 下。
+  -->
+  <!-- Condition: 只在单 TFM 的内层构建里拷。多目标构建的外层没有 OutDir，Copy 会因
+       目标位置为空报 MSB3023（dotnet build 整个解决方案时就会走到外层）。 -->
+  <Target Name="CopyLibClang" AfterTargets="Build" Condition="'$(TargetFramework)' != ''">
+    <ItemGroup>
+      <_LibClang Include="$(NuGetPackageRoot)\libclang.runtime.$(RuntimeIdentifier)\**\runtimes\$(RuntimeIdentifier)\native\libclang.dll" />
+    </ItemGroup>
+    <Message Importance="high" Text="CopyLibClang: $(NuGetPackageRoot) -> @(_LibClang)" />
+    <Copy SourceFiles="@(_LibClang)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

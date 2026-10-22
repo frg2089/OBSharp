@@ -1,161 +1,136 @@
 # OBSharp.Interop.Generator
 
-一个构建期命令行工具，用来把整个 libobs 互操作层（`libobs/`、`deps/w32-pthreads/`，以及
-`frontend/api/obs-frontend-api.h` 那套前端 API）生成到 `src/OBSharp.Interop/Generated/`。
-运行时不依赖它——只有当你改了 OBS 头文件或生成规则时，才需要手动跑一次。
+C/C++ 头文件 → C# 薄封装绑定生成器（`*.g.cs`）。单一事实来源是头文件的 `extern "C"` 导出面：
+头文件加一个函数 → 重新生成 → C# 侧就有了。ClangSharp **库模式**自写解析/发射，
+不走 ClangSharpPInvokeGenerator。
 
-> **注意**：本项目（以及它生成的所有绑定代码）完全由 AI 编写。提交前请先阅读代码，
-> 并 review 重新生成后的 diff。
-
-## 前置条件
-
-| 需要什么 | 为什么 |
-| --- | --- |
-| `global.json` 里指定的 .NET SDK | 编译和运行本生成器 |
-| `lib/obs-studio` 子模块 | 要被解析的 C 头文件都在这里 |
-| `ClangSharpPInvokeGenerator` 本地工具 | 真正执行 C → C# 的那一步 |
-
-```sh
-git submodule update --init --recursive   # 拉取 lib/obs-studio
-dotnet tool restore                       # 安装 ClangSharpPInvokeGenerator（版本锁在根目录 dotnet-tools.json）
+```text
+dotnet run --project src/OBSharp.Interop.Generator -- \
+    --input src/OBSharp.Interop.Native/src/QT/widget.h \
+    --lib OBSharp.Interop.Native \
+    --namespace OBSharp.Interop \
+    --output src/OBSharp.Interop/Generated/native
 ```
 
-## 用法
+## 命令行
 
-```sh
-dotnet run --project src/OBSharp.Interop.Generator
-```
+| 选项 | 必填 | 说明 |
+| --- | --- | --- |
+| `--input` / `-i` | ✓ | 输入头文件，可多个、**支持通配符**（`--input "lib/obs-studio/libobs/util/*.h"`）。**只收集声明位置落在这些头里的符号**；被 include 的 Qt/CEF/obs 声明参与解析但不产出 |
+| `--lib` / `-l` | ✓ | `LibraryImport` 的库名（如 `obs`、`OBSharp.Interop.Native`） |
+| `--lib-prefix` | | 函数名前缀 → 库名映射（`obs_frontend_=obs-frontend-api`），匹配不上走 `--lib` |
+| `--namespace` / `-n` | ✓ | 生成代码的命名空间 |
+| `--output` / `-o` | ✓ | 输出目录；每次运行先清掉旧的 `*.g.cs` 再全量重写 |
+| `--include` | | 附加 include 目录（`-I`），可多个 |
+| `--msvc-include` | | 钉死 MSVC STL 工具集目录（cc1 的 `-isystem`，排在默认 MSVC STL 之前） |
+| `--define` / `-D` | | 预处理器宏 |
+| `--extra-arg` | | 原样透传给 libclang 的参数 |
+| `--traverse` | | 符号名前缀过滤（支持尾部 `*`）；默认不滤 |
+| `--type-alias` | | C++ 记录 → .NET 等价类型（`name=Type`），内置 `vec2/vec3/vec4/matrix3/matrix4` → `System.Numerics` |
+| `--disable-runtime-marshalling` | | 可选形态：假定程序集带 `[assembly: DisableRuntimeMarshalling]`。委托全 blittable（`byte*` 字符串、指针出参），System.Numerics 等别名类型在 raw 层直走 `in/ref`。**默认关闭**——默认形态无需该特性 |
+| `--std` | | C++ 标准，默认 `c++20` |
+| `--string-marshaller` | | 返回值字符串 marshaller 全名，默认 `global::OBSharp.Interop.OBSStringMarshaller` |
 
-可选参数（必须放在 `--` 之后，`dotnet run` 才会把它们透传给生成器）：
+## 容错与降级（失败不拖垮整个运行）
 
-| 参数 | 作用 |
-| --- | --- |
-| `-SkipRaw` | 复用上一次运行留下的 ClangSharp 暂存产物，跳过重新解析头文件（需要之前至少完整跑过一次） |
-| `-SkipBuild` | 只生成，不编译 `OBSharp.Interop` 做验证 |
+- **跳过函数**：封送不了的签名（varargs、`va_list`、匿名函数指针）跳过并告警，stderr 列出原因
+- **结构体降级**：含不支持字段（复杂数组、union、匿名嵌套）的布局结构体不产出，引用它的指针
+  参数退化为 `nint` 并告警；标量定长数组映射 `fixed` 缓冲
+- **二级指针**：`T**` / `const char**` 配 `size_t` → 借用数组；配不上 → `ref nint`；
+  函数指针 typedef 再取指针（`log_handler_t*`）→ `ref` 委托；返回裸 `T**` → `nint`
 
-```sh
-dotnet run --project src/OBSharp.Interop.Generator -- -SkipBuild
-```
+## 产物形状
 
-工具会从自身程序集所在目录向上查找 `OBSharp.slnx` 来确定仓库根目录，所以在任何目录下
-都能启动。它对仓库唯一写入的位置是 `src/OBSharp.Interop/Generated/`；ClangSharp 的中间
-产物、以及它需要用到的 C 头文件，全都写在系统临时目录
-（Windows 下为 `%TEMP%/OBSharp-interop-staging`）。
-
-## 产物
-
-`src/OBSharp.Interop/Generated/` 下的所有内容都被 git 忽略，且每次运行都会完整重新生成
-——**不要手改**。
-
-| 目录 | 内容 |
-| --- | --- |
-| `Raw/` | 每个类型一个文件，外加 `Obs.cs`（`-m` 指定的方法类）；最直接的 `LibraryImport`/`DllImport` 绑定，已归一化为地道的 C# |
-| `Wrappers/` | 按前缀分组的包装类，带 string/bool 封送、`SafeHandle` 参数/返回值，以及自动生成的回调委托。分组名本身是个 C 类型时用扩展类（`ObsSourceExtensions` + `extension(ObsSource self)`），否则该分组有自己的静态容器类（`ObsFrontend`、`Graphics`、`Os`、`Base`、`Pthread`……），成员直接是类里的 `public static` 方法 |
-| `Handles/` | 每种“拥有所有权”的原生类型一个 `SafeHandle` 子类（释放函数自动识别） |
-
-`obs` 是 libobs 的模块名；前端 API 在单独的 DLL 里（`obs-frontend-api.dll`），所以那 98 个
-`obs_frontend_*` 入口写的是 `[LibraryImport("obs-frontend-api")]`。模块名由 `Pipeline.cs` 的
-`LibraryNameFor()` 按函数前缀决定——ClangSharp 的 `-l` 一次只能给一个模块名。
-
-友好层的调用示例：
+每个句柄/分组类一个 `.g.cs`，另有 `Enums.g.cs`、`Delegates.g.cs`、`Structs.g.cs`。
+类都是 `partial`，方便手写层用 partial 续成员。
 
 ```csharp
-using OBSharp.Interop;
-
-// 工厂直接给 SafeHandle：Dispose 时调用 obs_data_release()
-using var data = ObsDataExtensions.Create();
-string? json = data.GetJson();              // -> obs_data_get_json(self)
-
-// 会 addref / 转移所有权的查询同理
-using var source = ObsExtensions.GetSourceByName("Desktop Audio");
-
-// 借用的指针保持裸指针——它本来就不归你释放
-VideoOutput* video = ObsExtensions.GetVideo();
-
-// 返回新引用的 T** 出参也给成 SafeHandle
-if (ConfigDataExtensions.Open(out var config, "cfg.ini", ConfigOpenType.CONFIG_OPEN_EXISTING) == 0)
+public unsafe partial class QWidget : QObject
 {
-    using (config)
+    internal QWidget(nint ptr, bool ownsHandle) : base(ptr, ownsHandle) { }
+
+    /// <summary>
+    /// C ABI: <c>obsharp_widget_create</c>
+    /// </summary>
+    public static QWidget Create(QWidget? parent)
+        => new(obsharp_widget_create(parent), true); // 拥有句柄：Dispose 时释放
+
+    public void SetWindowTitle(string? title)
+        => obsharp_widget_set_window_title(this, title);
+
+    public QObject? InstallEventFilter(ObsharpWidgetFilterEventCallback? callback, nint user)
     {
-        // ...
+        nint p = obsharp_widget_install_event_filter(this, callback, user);
+        return p == 0 ? null : new(p, false); // 借用句柄：不负责释放
     }
+
+    [LibraryImport("OBSharp.Interop.Native", EntryPoint = "obsharp_widget_create")]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static partial nint obsharp_widget_create(QWidget? parent);
+    ...
 }
-
-// 想自己接管裸指针时也可以显式声明所有权：FromBorrowed 的 Dispose 什么都不做
-using var borrowed = ObsSourceHandle.FromBorrowed((nint)rawSource);
-
-// 辅助方法挂在各分组自己的类上
-ObsExtensions.Log(4 /* LOG_WARNING */, "50% done");   // -> blog()，已帮你转义 '%'
-
-// 没有对应 C 类型的分组各自是一个静态容器类（不然它们全都会挤在 Obs 上）
-Os.GetPathExtension(@"C:\path\file.txt");
-Graphics.TexrenderCreate();
-// 前端 API 也一样（它们来自 obs-frontend-api.dll，不属于 libobs）
-ObsFrontend.StreamingStart();
-ObsFrontend.SetCurrentProfile("My Profile");
-// 带接收者的成员仍落在各自类型的扩展类上，例如 ObsFrontendSourceListExtensions
 ```
 
-### 哪些指针该包成 SafeHandle
+- 方法参数名是 camelCase（`Create(QWidget? parent)`）；结构体字段是 Pascal（`RequestHeader.Name`）
+- 原始 `LibraryImport` 是类内 `private static partial`，公开面只有薄方法
+- 返回指针一律 raw 回 `nint`、薄层 `new` 包装（SafeHandle 不能当返回值封送）
+- 参数直接用 SafeHandle 类型（source-gen 调用期间自动加引用）
+- 句柄类按 C++ 继承关系生成（`QCefWidget : QWidget`、`QFileDialog : QWidget`、
+  `QWidget : QObject`），`Create(QWidget? parent)` 才能传派生类型
+- **相等性**：继承链根类重写 `Equals`/`GetHashCode`/`==`/`!=`，按 handle 指针判等
+- **所有权**：`*_create` 系且存在对应销毁函数 → `ownsHandle: true`（`Dispose` 时调
+  `*_destroy`）；`get_*`/`find_*`/`active_*` → 借用（`ownsHandle: false`，产物带注释）。
+  例外进入 `Naming.cs` 的表
+- `Close()` 这类与 `SafeHandle` 撞名的薄方法用 `new` 显式隐藏
 
-判据是**所有权**，不是类型：
+## 类型映射
 
-- **函数把新引用交给你**（`*_create*`、`obs_get_*_by_name`、`*_get_ref`、
-  `obs_weak_*_get_*`、`*_get_settings`、`obs_data_get_obj`……）——友好层直接返回
-  `XxxHandle`，`Dispose` 调用对应的 release 函数。
-- **函数只是借用**（`gs_get_context`、`obs_get_video`、`obs_output_get_service`……）——
-  友好层保持裸指针。这些指针不归调用方所有，包成 owning 的 `SafeHandle` 会在 GC
-  回收时释放掉不属于自己的内存。
-- **`T**` 出参**：确认是“返回新引用”的（`config_open`、`video_output_open`……）映射成
-  `out XxxHandle?`；其余（`obs_data_item_*` 这类 in/out 槽位）保持 `ref nint` 裸指针。
-- **前端 API**：`obs_frontend_get_current_scene` / `_current_transition` /
-  `_current_preview_scene` / `_streaming_output` / `_recording_output` /
-  `_replay_buffer_output` / `_virtualcam_output` 和 `obs_frontend_add_canvas` 在
-  `frontend/OBSStudioAPI.cpp` 里都是 `obs_*_get_ref`，所以包成 `SafeHandle`；
-  `obs_frontend_get_profile_config` / `_app_config` / `_user_config` / `_global_config` /
-  `_streaming_service` 返回的是借用指针，保持裸指针。这些成员都在 `ObsFrontend` 上。
+| C++ | C# |
+| --- | --- |
+| `const char*` 入参 | `string?` + `LPUTF8Str` |
+| `const char*` 返回 | `string?` + `OBSStringMarshaller`（只复制不释放） |
+| `const char**` + `size_t*` 返回 | `string[]`（当场拷贝） |
+| `const char**` + `size_t` 入参 | `string[]`（调用方拷贝进非托管后释放） |
+| `T**` + `size_t*` 返回 | `T?[]`（元素全是借用句柄） |
+| `bool` | `[MarshalAs(U1)] bool`（C++ bool 是 1 字节） |
+| `int*` 出参 | `out int` |
+| `size_t` / `uintptr_t` | `nuint` |
+| `long` / `unsigned long` | `CLong` / `CULong`（`System.Runtime.InteropServices`，位宽随平台） |
+| `long long` | `long` |
+| `vec2` / `vec3` / `vec4` | `Vector2` / `Vector3` / `Vector4`（`System.Numerics`，不产自定义 struct） |
+| `matrix3` / `matrix4` | `Matrix3x2` / `Matrix4x4`（`System.Numerics`） |
+| `void*` | `nint` |
+| Qt/CEF/自有枚举 | 按 C++ 作用域嵌套的 C# enum（`Qt.WindowType`、`QFileDialog.Option`…）；`Type/Option/Filter/Flags` 结尾带 `[Flags]` |
+| 函数指针 typedef | `[UnmanagedFunctionPointer(Cdecl)]` 委托 |
+| 布局结构体 | `StructLayout(Sequential)` 顺序布局；函数指针字段 → `delegate* unmanaged[Cdecl]<…>` |
 
-哪些函数算“给了新引用”，写在 `Pipeline.Wrappers.cs` 的 `OwnedReturns` /
-`OwnedOutParams` 两张表里，每条都注明依据（libobs 头文件注释、实现里的
-`*_addref`，等等）。**没进表的函数一律保持裸指针**：漏判最多是泄漏（还可以用
-`FromOwned` 手动接管），误判就是 use-after-free。要往里加条目，请先确认 OBS 侧
-确实转移了所有权。
+## 归属规则（机械）
 
-## 流水线阶段
+1. 首参数是句柄且等于家族段 → 实例方法（`obsharp_widget_set_window_title` → `QWidget.SetWindowTitle`）
+2. `create` 系返回家族句柄本身 → 静态工厂（`obsharp_widget_create` → `QWidget.Create(parent)`）
+3. 家族段映射到句柄类但首参不是它 → 该类的静态方法（`obsharp_filepicker_create` → `QFileDialog.Create(parent)`）
+4. 无 this → 按头文件分组的静态类（`application.h` → `Application`、`obsharp.h` → `Native`、`window.h` → `Window`…）
 
-1. **ClangSharp**（`Pipeline.ClangSharp.cs`）——通过本地工具解析一个伞形头文件。这个头
-   文件（以及 CMake 那个 `obsconfig.h` 的替身）不在仓库里，而是每次运行时由生成器写进
-   临时暂存目录，所以仓库里只有 C#。先用一次探测（probe）把实际访问到的仓库头文件记录到
-   日志，正式那一遍再遍历所有这些头文件。
-2. **Raw 归一化**（`Pipeline.RawPublish.cs`）——把暂存产物整理成地道 C#：
-   `snake_case` 类型 → PascalCase（声明**和**引用一起改）、`IntPtr` → `nint`、
-   `sbyte` → `byte`、C 的 `long`/`unsigned long` → `CLong`/`CULong`（Windows LLP64 与
-   Unix LP64 的原生宽度不一样）、在 AOT 源生成器能封送的前提下把 `DllImport` 换成
-   `LibraryImport`、补 `#nullable enable`，等等。
-3. **Wrappers**（`Pipeline.Wrappers.cs`）——解析 Raw 里的函数签名，生成包装类、回调委托和
-   `SafeHandle` 类；再按所有权表决定哪些指针返回值/`T**` 出参包成 `SafeHandle`。没有接收者
-   的静态成员落到分组自己的类上：分组名是 C 类型就用它的扩展类，否则用同名容器类
-   （`IsContainerGroup`）；`obs_` 本体是模块类，成员留在 `ObsExtensions`。
-4. **构建验证**（`Pipeline.BuildVerify.cs`）——对 `OBSharp.Interop` 跑 `dotnet build`；
-   编译器报缺的系统头类型（`FILE`、`stat`、`timespec`、`__m128` 等）会被自动 shim 进
-   `Generated/Raw/Compat.cs`，然后重试编译（最多三轮）。
+别名表 / 分组表 / 所有权表都在 `Naming.cs`。
 
-## 注意事项
+## 解析层说明
 
-- 前端 API 的 `char *` 返回值（`obs_frontend_get_current_profile` 等）在 OBS 侧是
-  `bstrdup`，文档要求调用方 `bfree`；绑定里它们保持裸指针 `byte*`，不走 string 封送，
-  释放责任仍然在调用方。
-- libobs 的 `const char *` 返回值（`obs_get_module_binary_path`、`obs_source_get_name`
-  等）是**借用**指针：内存归 libobs（`bstrdup` 出来挂在结构体上，由它自己释放）。
-  包装层给它们标 `[return: MarshalUsing(typeof(OBSStringMarshaller))]`——只
-  `Encoding.UTF8` 复制一份，不释放原内存。默认的 string marshaller 会把返回值当成
-  `CoTaskMemAlloc` 出来的内存、复制完再 `FreeCoTaskMem`，那就是释放别人的指针：堆损坏
-  （`0xC0000374`，ntdll 直接 fast-fail，宿主进程瞬间消失）。marshaller 是手写文件
-  `src/OBSharp.Interop/OBSStringMarshaller.cs`，不在 `Generated/` 里，不会被重新生成覆盖。
-- 输出是确定性的：跑两遍结果逐字节一致，所以重新生成可以直接当成普通 diff 来 review。
-- 实际只能在 **Windows** 上跑：include 路径是用反斜杠传的，那个自动生成的 `obsconfig.h`
-  也提供的是 MSVC 风格的默认值。但**生成出来的绑定**本身是跨平台的。
-- 少数 CRT/系统类型是近似处理而非精确绑定（`wchar_t`、`stat`、`timespec`、`_iobuf`、
-  `__m128`），原因写在 `Pipeline.*.cs` 的注释里。
-- 流水线里用到的正则全部是编译期生成的（`[GeneratedRegex]`），所以工具本身没有运行时
-  正则初始化开销。
+- libclang 21（ClangSharp 21.1.8.4 附带）驱动：`CXTranslationUnit.Parse` + 自写遍历
+- **STL 版本门槛**：libclang 21 会被 MSVC STL 14.52 的 `yvals_core.h`（STL1000）拒绝，
+  用 `--msvc-include` 钉旧工具集（如 `…\VC\Tools\MSVC\14.44.xxxxx\include`）绕开
+- **`-imsvc` 不可用**：那是 clang driver 选项，libclang 走 cc1；这里用 cc1 的 `-isystem`
+- **obsconfig.h 替身**：libobs 的 `obs-config.h` 要构建期生成的 `obsconfig.h`（不在仓库里）。
+  生成器会写一个最小替身到 `%TEMP%/obsharp-interop-generator/`，只为解析闭包通过
+- 诊断（错误级）打到 stderr，带完整 clang 文本
+
+## 边界
+
+- 只做「薄封装 + 机械映射」：SafeHandle 友好层、回调 thunk 生命周期（`Scheme.Register`
+  的托管委托垫片）继续手写，用 `partial` 续在同一张皮上
+- varargs 函数（`Log(...)`）过不了 C ABI 封送，自动跳过
+- 匿名函数指针参数不支持（必须是 typedef 命名的）
+
+## 验证方式
+
+产物用 `net11.0` + `AllowUnsafeBlocks` 的空工程直接编译（`LibraryImport` 源生成器
+参与封送），Native 全量 184 个函数的产物编译 0 警告 0 错误。
