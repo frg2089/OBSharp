@@ -70,22 +70,56 @@ jobs:
         run: dotnet tool restore
 
       - name: 还原 .NET 项目
-        run: dotnet restore --graph --artifacts-path artifacts
+        run: |-
+          dotnet restore OBSharp.slnx --graph --artifacts-path artifacts
+          dotnet restore src/OBSharp.PluginManager --graph --artifacts-path artifacts
 
-      - name: 编译 Interop 绑定生成器
-        run: dotnet build src/OBSharp.Interop.Generator --graph --artifacts-path artifacts --configuration Release --framework net11.0 --no-restore
+      # ── Interop 绑定生成：为什么必须现场生成、为什么不缓存产物 ─────────────────
+      # Generated/ 在 .gitignore 里（绑定产物不入库），托管构建前必须先生成。生成依赖
+      # 四样东西：
+      #   * lib/obs-studio、lib/obs-browser 子模块 —— 解析闭包（checkout 的
+      #     submodules: true 已带）；
+      #   * CEF / Qt6 头文件 —— lib/deps 里的预编译包，由下面两步拉取（native job 用
+      #     的同一套 cmake/ObSharpDeps.cmake，压缩包缓存 key 也与 native job 相同）；
+      #   * MSVC 14.44 的 STL —— libclang 21 会被 MSVC 14.52 的 yvals_core.h 以
+      #     STL1000 拒绝，生成器用 --msvc-include 钉旧工具集（runner 上要装 v14.44
+      #     组件；见 src/OBSharp.Interop.Generator/README.md）；
+      #   * libclang 原生库 —— ClangSharp 包自带，随生成器构建拷进输出目录。
+      # 头文件取 x64 包：产物是 C# 源码，跟头文件属于哪个架构无关，arm64 那份不必再拉。
+      # 取舍：不缓存 Generated/ —— 缓存 key 要覆盖「生成器源码 + 头文件 + 子模块版本」
+      # 三者，漏算任何一个都会出脏产物；生成本身不到一分钟，比排查脏缓存便宜。也不把
+      # 生成挪去 native job：它在 dotnet job 之后跑，而托管构建马上就要用产物。native /
+      # bundle job 需要的 Generated/ 由「上传构建缓存」传下去，不重复生成。
+
+      - name: 缓存原生依赖（CEF / Qt6 压缩包）
+        uses: actions/cache@v6
+        with:
+          path: |
+            lib/deps/*.zip
+            lib/deps/*.tar.xz
+          key: deps-${{ runner.os }}-x64-${{ hashFiles('lib/obs-studio/CMakePresets.json', 'cmake/ObSharpDeps.cmake') }}
+
+      - name: 拉取绑定生成所需的 CEF / Qt6 头文件
+        # 只为触发 cmake/ObSharpDeps.cmake 的下载 / 解压（配置期就拉依赖，不编译），
+        # 跑完 lib/deps 里就有生成器要的头文件。真正编译 native 是 native job 的事。
+        run: cmake --preset win-x64
 
       - name: 生成 Interop 绑定
-        run: dotnet run --project src/OBSharp.Interop.Generator --artifacts-path artifacts --configuration Release --framework net11.0 --no-restore --no-build
+        # 与本地同一条生成逻辑：调 Build-DevDist.ps1 的绑定生成步骤（-GeneratorOnly
+        # 只跑到生成就结束），命令不在此复制第二份；生成器随用随编（dotnet run）。
+        shell: pwsh
+        run: ./scripts/Build-DevDist.ps1 -GeneratorOnly -Configuration Release -Framework net11.0
 
+      # 下面的编译 / 发布链与 scripts/Build-DevDist.ps1 的⑤保持一致：解决方案两套 TFM
+      # 一起编（插件管理器只有 net10.0，跟着宿主那份 -f 走会错），发布时各按各的 TFM。
       - name: 编译 .NET 项目
-        run: dotnet build --graph --artifacts-path artifacts --configuration Release --framework net11.0 --no-restore
+        run: dotnet build OBSharp.slnx --graph --artifacts-path artifacts --configuration Release --no-restore
 
       - name: 发布 Runtime
-        run: dotnet publish src/OBSharp.Runtime --graph --artifacts-path artifacts --configuration Release --framework net11.0 --no-restore --no-build
+        run: dotnet publish src/OBSharp.Runtime --graph --artifacts-path artifacts --configuration Release --framework net11.0 --no-restore
 
       - name: 发布 PluginManager
-        run: dotnet publish src/OBSharp.PluginManager --graph --artifacts-path artifacts --configuration Release --framework net11.0 --no-restore --no-build
+        run: dotnet publish src/OBSharp.PluginManager --graph --artifacts-path artifacts --configuration Release --no-restore
 
       - name: 上传托管程序集
         uses: actions/upload-artifact@v7
@@ -98,7 +132,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: pluginmanager-assemblies
-          path: artifacts/publish/OBSharp.PluginManager/release_net11.0/
+          path: artifacts/publish/OBSharp.PluginManager/release_net10.0/
           if-no-files-found: error
 
       - name: 上传构建缓存

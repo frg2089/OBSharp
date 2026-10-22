@@ -9,7 +9,7 @@
 .DESCRIPTION
 这个脚本是 CI 的本地镜像，**步骤顺序与 build.yml 的 job 一一对应**：
 
-  ① dotnet  job：生成版本文件 → 还原工具 → 还原 → 编译生成器 → 生成绑定
+  ① dotnet  job：生成版本文件 → 还原工具 → 还原 → 生成绑定（生成器随用随编）
                 → 编译托管侧 → 发布 Runtime / PluginManager
   ② native  job：cmake --preset <rid> → cmake --build --preset <rid>-release
                 → 还原/编译/发布 Loader（NativeAOT）
@@ -22,6 +22,9 @@
 
   * 不下载/上传 artifact，直接用当前 worktree 的产物；
   * 默认只处理一个 RID（CI 的矩阵是 6 个跑在 6 台机器上）。
+
+绑定生成（第④步）是本脚本的内部函数，也是本地与 CI 共用的唯一一份生成逻辑：
+build.yml 的 dotnet job 用 -GeneratorOnly 只跑这一步，命令不存在第二份拷贝。
 
 产物是**真实文件**，可以直接拷走或整份挂进 OBS：
 
@@ -56,6 +59,15 @@ cmake 可执行文件路径。默认先找 PATH，再找 VS 自带的（Windows�
 .PARAMETER SkipGenerator
 不跑 Interop 绑定生成器，直接用 src/OBSharp.Interop/Generated/ 里现在这份。
 
+.PARAMETER GeneratorOnly
+只跑第④步的 Interop 绑定生成（写 src/OBSharp.Interop/Generated/{native,libobs}）
+就结束，其余步骤全跳过。CI 的 dotnet job 用它；与 -SkipGenerator 互斥。
+
+.PARAMETER MsvcInclude
+MSVC STL 的 include 目录。绑定生成用它钉 MSVC 14.44（libclang 21 会被 MSVC
+14.52 的 yvals_core.h 以 STL1000 拒绝，见 src/OBSharp.Interop.Generator/README.md）。
+默认自动在各 VS 安装里找 14.44.* 工具集；机器上没装 14.44 时用它手动指定。
+
 .PARAMETER SkipVersion
 不生成 Directory.Version.props / Directory.Version.cmake，用仓库里现有的。
 （CI 上这两份是 GitVersion 产出的；本地缺它们时脚本会自动写占位版本。）
@@ -73,6 +85,10 @@ cmake 可执行文件路径。默认先找 PATH，再找 VS 自带的（Windows�
 .EXAMPLE
 ./scripts/Build-DevDist.ps1 -SkipNative -SkipGenerator
 # 原生库和生成代码都没动，只重编托管侧再摆一遍
+
+.EXAMPLE
+./scripts/Build-DevDist.ps1 -GeneratorOnly
+# 只重新生成绑定（CI 的 dotnet job 就是这个形态）
 
 .EXAMPLE
 ./scripts/Build-DevDist.ps1 -OutputDir /tmp/obsharp-dist
@@ -102,6 +118,12 @@ param (
 
   [switch]
   $SkipGenerator,
+
+  [switch]
+  $GeneratorOnly,
+
+  [string]
+  $MsvcInclude,
 
   [switch]
   $SkipVersion,
@@ -138,8 +160,12 @@ if (-not $Rid) { $Rid = "$HostOs-$(Get-HostArch)" }
 # 脚本只能为「本机能编出来的原生库」打包。交叉编译托管侧可以，但原生库不行
 # （CMake 用的是本机工具链），所以早失败比编到一半失败好。
 $RidOs = $Rid -replace '-.*$', ''
-if ($RidOs -ne $HostOs -and -not $SkipNative) {
+if ($RidOs -ne $HostOs -and -not $SkipNative -and -not $GeneratorOnly) {
   throw "RID $Rid 属于 $RidOs，而当前机器是 $HostOs。跨平台的原生库要在对应平台上编（或用 -SkipNative 复用已有产物）。"
+}
+
+if ($GeneratorOnly -and $SkipGenerator) {
+  throw '-GeneratorOnly 与 -SkipGenerator 互斥：一个只跑绑定生成，一个跳过绑定生成。'
 }
 
 # ---- 路径 -------------------------------------------------------------------
@@ -229,6 +255,217 @@ function Resolve-CMakeExe {
   throw '找不到 cmake：PATH 里没有，常见安装位置也没有。用 -CMake <路径> 指一个，或者用 -SkipNative 跳过原生库。'
 }
 
+function Resolve-MsvcStlInclude {
+  # libclang 21 会被 MSVC 14.52 的 yvals_core.h（STL1000）拒绝，钉 14.44 绕开。
+  if ($MsvcInclude) {
+    if (-not (Test-Path -LiteralPath $MsvcInclude)) { throw "-MsvcInclude 指的目录不存在：$MsvcInclude" }
+    return $MsvcInclude
+  }
+
+  $msvcRoots = [System.Collections.Generic.List[string]]::new()
+
+  # vswhere 按注册表找 VS，含预发布版（VS 2026 Insiders）和装在非系统盘的那些。
+  $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+  if (Test-Path -LiteralPath $vswhere) {
+    foreach ($install in & $vswhere -products * -all -prerelease -property installationPath) {
+      if ($install) { $msvcRoots.Add((Join-Path $install 'VC/Tools/MSVC')) }
+    }
+  }
+
+  # vswhere 不在时兜一下常见安装根（<根>\Microsoft Visual Studio\<大版本>\<发行版>\VC\...）。
+  foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+    if (-not $base) { continue }
+    $vsRoot = Join-Path $base 'Microsoft Visual Studio'
+    if (-not (Test-Path -LiteralPath $vsRoot)) { continue }
+    foreach ($major in Get-ChildItem -Path $vsRoot -Directory -ErrorAction SilentlyContinue) {
+      foreach ($edition in Get-ChildItem -Path $major.FullName -Directory -ErrorAction SilentlyContinue) {
+        $msvcRoots.Add((Join-Path $edition.FullName 'VC/Tools/MSVC'))
+      }
+    }
+  }
+
+  foreach ($root in $msvcRoots) {
+    $toolset = Get-ChildItem -Path $root -Directory -Filter '14.44.*' -ErrorAction SilentlyContinue |
+      Sort-Object -Property Name -Descending | Select-Object -First 1
+    if ($toolset) {
+      $include = Join-Path $toolset.FullName 'include'
+      if (Test-Path -LiteralPath $include) { return $include }
+    }
+  }
+
+  throw @'
+找不到 MSVC 14.44 工具集的 include 目录。libclang 21 会被新版 MSVC STL 拒绝
+（yvals_core.h 的 STL1000），必须钉 14.44：在 Visual Studio Installer 里装
+「MSVC v143 - C++ x64/x86 生成工具 (v14.44)」组件，或用 -MsvcInclude <目录> 手动指定。
+'@
+}
+
+# ---- Interop 绑定生成（本地与 CI 共用的唯一一份生成逻辑） --------------------
+#
+# 产物两套（--namespace 都是 OBSharp.Interop，生成器随用随编，dotnet run）：
+#   src/OBSharp.Interop/Generated/native   --lib OBSharp.Interop.Native（+ --traverse obsharp_）
+#   src/OBSharp.Interop/Generated/libobs   --lib obs --lib-prefix obs_frontend_=obs-frontend-api
+# Generated/ 在 .gitignore 里，不入库，每次构建前重新生成（-SkipGenerator 跳过）。
+# build.yml 的 dotnet job 用本脚本的 -GeneratorOnly 跑的就是这里，不存在第二份命令。
+#
+# 输入头文件是显式列表（生成器的 --input 语义上支持通配符，但解析环节不展开，这里一律
+# 传具体文件）：
+#   * native：src/OBSharp.Interop.Native/src 下的 C ABI 导出面 —— obsharp.h、host.h、
+#     logger.h、QT 的五个、CEF 的两个。QT/qt.h 是 QString/std::string 的 C++ inline
+#     辅助、CEF/widgetsignals.h 是 Q_OBJECT 信号适配器，都没有 OBSHARP_API 导出，刻意
+#     不进输入（它们仍通过 --include src/OBSharp.Interop.Native/src 参与解析）；再加
+#     --traverse obsharp_ 双保险。logger.h 里的 LogCore / Log 是 namespace OBSharp 里的
+#     普通 C++ 函数（没有 OBSHARP_API/OBSHARP_CALL，Log 还是变参），不在 DLL 导出面，
+#     被滤掉是正确行为 —— 哪天真要从 C# 调它，正确做法是在 native 侧加 obsharp_ 前缀的
+#     C ABI 包装再重新生成，而不是放宽 --traverse。
+#   * libobs：libobs 的 obs*.h（去掉 internal / nix / ffmpeg-compat / obsversion 这些
+#     非导出头）+ util / graphics / media-io / callback 四个目录的全部头 +
+#     obs-frontend-api + w32-pthreads 三件套（pthread / semaphore / sched）。此目标
+#     不带 --traverse，靠 --input 全量收敛。
+#
+# 解析需要 include：Qt6 / CEF / obs-browser panel / libobs（native 目标里
+# browser-panel.hpp 的解析闭包）+ Native 自己的 src。CEF / Qt6 头文件来自 lib/deps 的
+# 预编译包（cmake/ObSharpDeps.cmake 在 cmake 配置期下载解压）；绑定只吃头文件，包属于
+# 哪个架构无所谓，优先挑目标架构那份。
+function Invoke-BindingGeneration {
+  # 子模块 / 依赖缺了就早失败，别等生成器报一堆 include 找不到。
+  $required = [ordered]@{
+    'libobs（git submodule update --init）' = 'lib/obs-studio/libobs/obs.h'
+    'obs-frontend-api 头文件（git submodule update --init）' = 'lib/obs-studio/frontend/api/obs-frontend-api.h'
+    'w32-pthreads 头文件（git submodule update --init）' = 'lib/obs-studio/deps/w32-pthreads/pthread.h'
+    'obs-browser panel 头文件（git submodule update --init）' = 'lib/obs-browser/panel/browser-panel.hpp'
+  }
+  foreach ($name in $required.Keys) {
+    if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot $required[$name]))) {
+      throw "缺 $name`n`n　$(Join-Path $RepoRoot $required[$name])"
+    }
+  }
+
+  # CEF / Qt6 头文件（lib/deps 里的预编译包）。
+  $depsDir = Join-Path $RepoRoot 'lib/deps'
+
+  $qtDirs = @(Get-ChildItem -Path $depsDir -Directory -Filter 'obs-deps-qt6-*' -ErrorAction SilentlyContinue)
+  if ($qtDirs.Count -eq 0) {
+    throw 'lib/deps 下没有 Qt6（obs-deps-qt6-*）。先跑一次 cmake --preset <rid> 把依赖拉下来（见 cmake/ObSharpDeps.cmake）。'
+  }
+  $qtDir = $qtDirs | Where-Object { $_.Name -like "*-$NativeArch" } | Select-Object -First 1
+  if (-not $qtDir) { $qtDir = $qtDirs | Select-Object -First 1 }
+  Write-Detail "Qt6: $($qtDir.FullName)"
+
+  $cefDirs = @(Get-ChildItem -Path $depsDir -Directory -Filter 'cef_binary_*' -ErrorAction SilentlyContinue |
+    Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'include/cef_base.h') })
+  if ($cefDirs.Count -eq 0) {
+    throw 'lib/deps 下没有 CEF（cef_binary_*）。先跑一次 cmake --preset <rid> 把依赖拉下来（见 cmake/ObSharpDeps.cmake）。'
+  }
+  $cefDir = $cefDirs | Where-Object { $_.Name -like "*$NativeArch*" } | Select-Object -First 1
+  if (-not $cefDir) { $cefDir = $cefDirs | Select-Object -First 1 }
+  Write-Detail "CEF: $($cefDir.FullName)"
+
+  $msvcStl = $null
+  if ($IsWindows) {
+    $msvcStl = Resolve-MsvcStlInclude
+    Write-Detail "MSVC STL: $msvcStl"
+  }
+
+  # 两个目标共用一个 include 集：多给的 include 不影响产物（只收集声明位置落在
+  # --input 头里的符号），所以统一给全。
+  $includes = [System.Collections.Generic.List[string]]::new()
+  $includes.Add('src/OBSharp.Interop.Native/src')
+  $includes.Add('lib/obs-studio/libobs')
+  $includes.Add('lib/obs-studio/deps/w32-pthreads')
+  $includes.Add('lib/obs-studio')
+  $includes.Add('lib/obs-browser/panel')
+  $includes.Add($cefDir.FullName)
+  $includes.Add((Join-Path $qtDir.FullName 'include'))
+  $includes.Add((Join-Path $qtDir.FullName 'include/QtCore'))
+  $includes.Add((Join-Path $qtDir.FullName 'include/QtGui'))
+  $includes.Add((Join-Path $qtDir.FullName 'include/QtWidgets'))
+
+  # dotnet run：生成器随用随编。生成器是多目标项目，必须带 --framework 挑一个 TFM。
+  function Invoke-Generator([string[]] $GeneratorArgs) {
+    Invoke-DotNet @(@('run', '--project', 'src/OBSharp.Interop.Generator',
+        '--configuration', $Configuration, '--framework', $Framework, '--') + $GeneratorArgs)
+  }
+
+  # ---- native ----------------------------------------------------------------
+
+  Write-Step '生成 Interop 绑定 → src/OBSharp.Interop/Generated/native'
+
+  $nativeArgs = [System.Collections.Generic.List[string]]::new()
+  foreach ($header in @(
+      'src/OBSharp.Interop.Native/src/obsharp.h',
+      'src/OBSharp.Interop.Native/src/host.h',
+      'src/OBSharp.Interop.Native/src/logger.h',
+      'src/OBSharp.Interop.Native/src/QT/thread.h',
+      'src/OBSharp.Interop.Native/src/QT/application.h',
+      'src/OBSharp.Interop.Native/src/QT/widget.h',
+      'src/OBSharp.Interop.Native/src/QT/window.h',
+      'src/OBSharp.Interop.Native/src/QT/filepicker.h',
+      'src/OBSharp.Interop.Native/src/CEF/qcef.h',
+      'src/OBSharp.Interop.Native/src/CEF/scheme.h')) {
+    $nativeArgs.Add('--input')
+    $nativeArgs.Add($header)
+  }
+  foreach ($include in $includes) {
+    $nativeArgs.Add('--include')
+    $nativeArgs.Add($include)
+  }
+  if ($msvcStl) {
+    $nativeArgs.Add('--msvc-include')
+    $nativeArgs.Add($msvcStl)
+  }
+  $nativeArgs.Add('--traverse')
+  $nativeArgs.Add('obsharp_')
+  $nativeArgs.Add('--lib')
+  $nativeArgs.Add('OBSharp.Interop.Native')
+  $nativeArgs.Add('--namespace')
+  $nativeArgs.Add('OBSharp.Interop')
+  $nativeArgs.Add('--output')
+  $nativeArgs.Add('src/OBSharp.Interop/Generated/native')
+
+  Invoke-Generator $nativeArgs.ToArray()
+
+  # ---- libobs ----------------------------------------------------------------
+
+  Write-Step '生成 Interop 绑定 → src/OBSharp.Interop/Generated/libobs'
+
+  $libobsArgs = [System.Collections.Generic.List[string]]::new()
+  foreach ($header in @(
+      @(Get-ChildItem -Path (Join-Path $RepoRoot 'lib/obs-studio/libobs') -Filter 'obs*.h' |
+          Where-Object { $_.Name -notmatch 'internal|nix|ffmpeg-compat|obsversion' } |
+          ForEach-Object { "lib/obs-studio/libobs/$($_.Name)" }) +
+      @(@('util', 'graphics', 'media-io', 'callback') | ForEach-Object {
+          $dir = $_
+          Get-ChildItem -Path (Join-Path $RepoRoot "lib/obs-studio/libobs/$dir") -Filter '*.h' |
+            ForEach-Object { "lib/obs-studio/libobs/$dir/$($_.Name)" }
+        }) +
+      @('lib/obs-studio/frontend/api/obs-frontend-api.h',
+        'lib/obs-studio/deps/w32-pthreads/pthread.h',
+        'lib/obs-studio/deps/w32-pthreads/semaphore.h',
+        'lib/obs-studio/deps/w32-pthreads/sched.h'))) {
+    $libobsArgs.Add('--input')
+    $libobsArgs.Add($header)
+  }
+  foreach ($include in $includes) {
+    $libobsArgs.Add('--include')
+    $libobsArgs.Add($include)
+  }
+  if ($msvcStl) {
+    $libobsArgs.Add('--msvc-include')
+    $libobsArgs.Add($msvcStl)
+  }
+  $libobsArgs.Add('--lib')
+  $libobsArgs.Add('obs')
+  $libobsArgs.Add('--lib-prefix')
+  $libobsArgs.Add('obs_frontend_=obs-frontend-api')
+  $libobsArgs.Add('--namespace')
+  $libobsArgs.Add('OBSharp.Interop')
+  $libobsArgs.Add('--output')
+  $libobsArgs.Add('src/OBSharp.Interop/Generated/libobs')
+
+  Invoke-Generator $libobsArgs.ToArray()
+}
+
 # dotnet 必须能跑。这里不检查版本：版本钉在 global.json 里，rollForward 会处理。
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
   throw '找不到 dotnet SDK。先装 .NET SDK（版本见 global.json）。'
@@ -237,6 +474,15 @@ if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
 # 下面的 dotnet / cmake 都按仓库根的相对路径写，所以先把工作目录挪过去（跑完再挪回来）。
 Push-Location $RepoRoot
 try {
+
+  # ---- 只跑绑定生成（-GeneratorOnly）：CI 的 dotnet job 用的就是这个形态 -------
+
+  if ($GeneratorOnly) {
+    Write-Step '只生成 Interop 绑定（-GeneratorOnly）'
+    Invoke-BindingGeneration
+    Write-Step 'Interop 绑定生成完成'
+    return
+  }
 
   # ---- ① dotnet job：版本文件 -------------------------------------------------
 
@@ -318,30 +564,9 @@ set(OBSHARP_VERSION_FILE "0.0.0.0")
   }
   else {
     Write-Step '④ Interop 绑定（会重写 src/OBSharp.Interop/Generated/）'
-    Invoke-DotNet @('build', 'src/OBSharp.Interop.Generator', '--graph',
-      '--artifacts-path', $ArtifactsPath, '-c', $Configuration, '-f', $Framework, '--no-restore')
-
-    # 用 `dotnet exec <dll>` 而不是 `dotnet run --project ...`。
-    #
-    # 两者跑的是同一个程序集，但在受限环境（本仓库的开发机上就有）里有决定性差别：
-    # 从 artifacts/ 下用 apphost（.exe）启动的进程，写权限被限制在工作区根目录，
-    # src/、out/ 和系统 temp 全部 Access denied —— 生成器要往 Generated/ 和 temp
-    # 写中间产物，直接就失败了。`dotnet exec` 由 dotnet 宿主自己加载程序集，不受这条
-    # 限制。CI 上两种都能跑，所以统一用 exec 没有副作用，还省掉一次 MSBuild 求值。
-    $generatorDll = Join-Path $ArtifactsPath "bin/OBSharp.Interop.Generator/$($ConfigName)_$Framework/OBSharp.Interop.Generator.dll"
-    if (-not (Test-Path -LiteralPath $generatorDll)) {
-      # 没带 -f 的构建布局是另一个目录名（不带 TFM 后缀）；兜一下，别让人猜。
-      $generatorDll = @(Get-ChildItem -Path (Join-Path $ArtifactsPath 'bin/OBSharp.Interop.Generator') -Recurse -Filter 'OBSharp.Interop.Generator.dll' -ErrorAction SilentlyContinue) |
-        Where-Object { $_.FullName -like "*$ConfigName*" } |
-        Sort-Object -Property LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName
-    }
-    if (-not $generatorDll -or -not (Test-Path -LiteralPath $generatorDll)) {
-      throw "找不到生成器程序集（$ArtifactsPath/bin/OBSharp.Interop.Generator/）。先不带 -SkipGenerator 重跑一次。"
-    }
-
-    Write-Detail "dotnet exec $generatorDll"
-    & dotnet exec $generatorDll
-    if ($LASTEXITCODE -ne 0) { throw "Interop 绑定生成失败（退出码 $LASTEXITCODE）" }
+    # 生成逻辑就在本脚本的 Invoke-BindingGeneration 里；CI 的 build.yml 用
+    # -GeneratorOnly 跑同一步，命令不存在第二份拷贝。生成器随用随编（dotnet run）。
+    Invoke-BindingGeneration
   }
 
   # ---- ⑤ dotnet job：编译 + 发布 ----------------------------------------------
