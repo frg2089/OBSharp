@@ -66,9 +66,6 @@ jobs:
           set(OBSHARP_VERSION_FILE "${{ steps.gitversion.outputs.assemblySemFileVer }}")
           "@ | Set-Content -Path Directory.Version.cmake -Encoding utf8
 
-      - name: 还原 .NET 工具
-        run: dotnet tool restore
-
       - name: 还原 .NET 项目
         run: |-
           dotnet restore --graph --artifacts-path artifacts

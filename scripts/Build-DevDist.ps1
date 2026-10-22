@@ -551,11 +551,8 @@ set(OBSHARP_VERSION_FILE "0.0.0.0")
 
   # ---- ③ dotnet job：还原 -----------------------------------------------------
 
-  Write-Step '③ 还原 .NET 工具与项目'
-  Invoke-DotNet @('tool', 'restore')
-  Invoke-DotNet @('restore', 'OBSharp.slnx', '--graph', '--artifacts-path', $ArtifactsPath)
-  # 插件管理器单独再还原一次：它是不是在解决方案里由 OBSharp.slnx 决定，这里不靠那个。
-  Invoke-DotNet @('restore', 'src/OBSharp.PluginManager', '--graph', '--artifacts-path', $ArtifactsPath)
+  Write-Step '③ 还原 .NET 项目'
+  Invoke-DotNet @('restore',  '--graph', '--artifacts-path', $ArtifactsPath)
 
   # ---- ④ dotnet job：Interop 绑定生成器 --------------------------------------
 
@@ -573,14 +570,13 @@ set(OBSHARP_VERSION_FILE "0.0.0.0")
 
   Write-Step '⑤ 编译并发布托管侧'
 
-  # 整个解决方案两套 TFM 都编：插件管理器只有 net10.0，跟着宿主那份 -f 走会报错。
-  Invoke-DotNet @('build', 'OBSharp.slnx', '--graph', '--artifacts-path', $ArtifactsPath,
+  Invoke-DotNet @('build', '--graph', '--artifacts-path', $ArtifactsPath,
     '-c', $Configuration, '--no-restore')
 
   Invoke-DotNet @('publish', 'src/OBSharp.Runtime', '--graph', '--artifacts-path', $ArtifactsPath,
     '-c', $Configuration, '-f', $Framework, '--no-restore')
   Invoke-DotNet @('publish', 'src/OBSharp.PluginManager', '--graph', '--artifacts-path', $ArtifactsPath,
-    '-c', $Configuration, '--no-restore')
+    '-c', $Configuration, '-f', $Framework, '--no-restore')
 
   # ---- ⑥ native job：Loader（NativeAOT） -------------------------------------
 
