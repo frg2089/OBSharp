@@ -169,6 +169,7 @@ target_include_directories(
 target_link_libraries(
   OBSharp.Interop.Native
   PRIVATE
+    OBSharp::SIMDe
     Qt6::Widgets
     CEF::Wrapper
     CEF::Library
