@@ -58,10 +58,10 @@ public static partial class OBSModule
         // 这两个路径是排查「插件列表读不到 / 插件 dll 找不到」的第一条线索：
         // 它们决定 $bin / $binAny / $data 三个前缀解析到哪里。
         var startupLogger = s_app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("OBSharp.OBSModule");
-        startupLogger.LogDebug("Module binary path: {BinaryPath}", binaryPath);
-        startupLogger.LogDebug("Module data path:   {DataPath}", dataPath);
-        startupLogger.LogDebug("Managed host path:  {ManagedPath}", AppContext.BaseDirectory);
-        startupLogger.LogDebug(".NET runtime:       {RuntimeVersion}", Environment.Version);
+        LogModuleBinaryPath(startupLogger, binaryPath);
+        LogModuleDataPath(startupLogger, dataPath);
+        LogManagedHostPath(startupLogger, AppContext.BaseDirectory);
+        LogRuntimeVersion(startupLogger, Environment.Version);
     }
 
     [UnmanagedCallersOnly]
@@ -71,13 +71,13 @@ public static partial class OBSModule
             return 0;
 
         var logger = s_app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("OBSharp.OBSModule");
-        logger.LogDebug("OBSModule.Load: starting the host");
+        LogLoadStarting(logger);
 
         s_app.Start();
-        logger.LogDebug("OBSModule.Load: host started; beginning plugin load");
+        LogHostStarted(logger);
 
         var loaded = s_app.Services.GetRequiredService<OBSharpHost>().Load();
-        logger.LogDebug("OBSModule.Load: finished (result={Result})", loaded);
+        LogLoadFinished(logger, loaded);
         return loaded ? 1 : 0;
     }
 
@@ -87,9 +87,8 @@ public static partial class OBSModule
         if (s_app is null)
             return;
 
-        s_app.Services.GetRequiredService<ILoggerFactory>()
-            .CreateLogger("OBSharp.OBSModule")
-            .LogDebug("OBSModule.PostLoad: notifying plugins");
+        LogPostLoadNotifying(s_app.Services.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("OBSharp.OBSModule"));
 
         s_app.Services.GetRequiredService<OBSharpHost>().PostLoad();
     }
@@ -101,13 +100,13 @@ public static partial class OBSModule
             return;
 
         var logger = s_app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("OBSharp.OBSModule");
-        logger.LogDebug("OBSModule.Unload: stopping plugins");
+        LogUnloadStoppingPlugins(logger);
 
         s_app.Services.GetRequiredService<OBSharpHost>().Unload();
 
-        logger.LogDebug("OBSModule.Unload: stopping the host");
+        LogUnloadStoppingHost(logger);
         s_app.StopAsync().Wait();
-        logger.LogDebug("OBSModule.Unload: done");
+        LogUnloadDone(logger);
     }
 
     [UnmanagedCallersOnly]
@@ -199,4 +198,37 @@ public static partial class OBSModule
 
         return 0;
     }
+
+    [LoggerMessage(LogLevel.Debug, "Module binary path: {BinaryPath}")]
+    private static partial void LogModuleBinaryPath(ILogger logger, string? binaryPath);
+
+    [LoggerMessage(LogLevel.Debug, "Module data path:   {DataPath}")]
+    private static partial void LogModuleDataPath(ILogger logger, string? dataPath);
+
+    [LoggerMessage(LogLevel.Debug, "Managed host path:  {ManagedPath}")]
+    private static partial void LogManagedHostPath(ILogger logger, string? managedPath);
+
+    [LoggerMessage(LogLevel.Debug, ".NET runtime:       {RuntimeVersion}")]
+    private static partial void LogRuntimeVersion(ILogger logger, Version runtimeVersion);
+
+    [LoggerMessage(LogLevel.Debug, "OBSModule.Load: starting the host")]
+    private static partial void LogLoadStarting(ILogger logger);
+
+    [LoggerMessage(LogLevel.Debug, "OBSModule.Load: host started; beginning plugin load")]
+    private static partial void LogHostStarted(ILogger logger);
+
+    [LoggerMessage(LogLevel.Debug, "OBSModule.Load: finished (result={Result})")]
+    private static partial void LogLoadFinished(ILogger logger, bool result);
+
+    [LoggerMessage(LogLevel.Debug, "OBSModule.PostLoad: notifying plugins")]
+    private static partial void LogPostLoadNotifying(ILogger logger);
+
+    [LoggerMessage(LogLevel.Debug, "OBSModule.Unload: stopping plugins")]
+    private static partial void LogUnloadStoppingPlugins(ILogger logger);
+
+    [LoggerMessage(LogLevel.Debug, "OBSModule.Unload: stopping the host")]
+    private static partial void LogUnloadStoppingHost(ILogger logger);
+
+    [LoggerMessage(LogLevel.Debug, "OBSModule.Unload: done")]
+    private static partial void LogUnloadDone(ILogger logger);
 }
