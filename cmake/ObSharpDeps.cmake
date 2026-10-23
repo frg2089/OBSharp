@@ -1,4 +1,4 @@
-# ObSharpDeps.cmake —— 构建 OBSharp.Interop.Native 之前，把 CEF / Qt6 拉到本地。
+# ObSharpDeps.cmake —— 构建 OBSharp.Interop.Native 之前，准备 CEF / Qt6 / SIMDe。
 #
 # 不写死版本，直接读 lib/obs-studio 的依赖清单：
 #   * 版本 / 地址 / SHA-256 / 修订号 ← CMakePresets.json 里名为 "dependencies" 的
@@ -12,6 +12,8 @@
 #
 # 可调变量：
 #   OBSHARP_FETCH_DEPS  ON/OFF，缺依赖时是否自动下载（默认 ON）
+#   OBSHARP_SIMDE_ROOT  已有 SIMDe 源码根目录（里面应包含 simde/ 子目录）
+#   OBSHARP_SIMDE_VERSION  自动获取的 SIMDe 版本（默认 v0.8.2）
 #   OBSHARP_DEPS_DIR    下载 / 解压的落点（默认 <仓库根>/lib/deps）
 #   CEF_ROOT_DIR        已经给了就不再动 CEF
 #   CMAKE_PREFIX_PATH   里面已经有 Qt6 就不再下 Qt6
@@ -174,7 +176,7 @@ elseif(_obsharp_os STREQUAL "linux")
 endif()
 
 # ---------------------------------------------------------------------------
-# 解析一个依赖 → URL / SHA-256 / 压缩包名 / 解压目录 / 标志文件
+# 解析一个依赖的版本信息 → URL / SHA-256 / 压缩包名 / 解压目录 / 标志文件（不下载）
 # ---------------------------------------------------------------------------
 
 function(_obsharp_resolve dependency out_url out_hash out_file out_destination out_sentinel)
@@ -245,172 +247,10 @@ function(_obsharp_resolve dependency out_url out_hash out_file out_destination o
   set(${out_sentinel} "${_sentinel}" PARENT_SCOPE)
 endfunction()
 
-# ---------------------------------------------------------------------------
-# 下载 + 校验 + 解压
-# ---------------------------------------------------------------------------
+# 依赖版本在本入口统一定义；下载 / 校验 / 解压写在各依赖自己的 .cmake 里。
+set(OBSHARP_SIMDE_VERSION "v0.8.2" CACHE STRING "自动获取的 SIMDe Git tag")
+set(OBSHARP_SIMDE_ROOT "" CACHE PATH "已有的 SIMDe 源码根目录（包含 simde/ 子目录）")
 
-function(_obsharp_ensure dependency out_dir)
-  cmake_parse_arguments(PARSE_ARGV 2 _OE "" "ARCH" "")
-
-  if(_OE_ARCH)
-    _obsharp_resolve("${dependency}" _url _hash _file _destination _sentinel ARCH "${_OE_ARCH}")
-  else()
-    _obsharp_resolve("${dependency}" _url _hash _file _destination _sentinel)
-  endif()
-
-  set(_destination_dir "${OBSHARP_DEPS_DIR}/${_destination}")
-  if(EXISTS "${_destination_dir}/${_sentinel}")
-    message(STATUS "OBSharp: ${dependency} 已就绪（${_destination_dir}）")
-    set(${out_dir} "${_destination_dir}" PARENT_SCOPE)
-    return()
-  endif()
-
-  if(NOT OBSHARP_FETCH_DEPS)
-    message(
-      FATAL_ERROR
-        "缺少 ${dependency}（${_destination_dir}）。\n"
-        "把 OBSHARP_FETCH_DEPS 设成 ON 允许自动下载，或用 CEF_ROOT_DIR / CMAKE_PREFIX_PATH 指定现成的。"
-    )
-  endif()
-
-  file(MAKE_DIRECTORY "${OBSHARP_DEPS_DIR}")
-  set(_archive "${OBSHARP_DEPS_DIR}/${_file}")
-
-  set(_need_download TRUE)
-  if(EXISTS "${_archive}")
-    file(SHA256 "${_archive}" _actual_hash)
-    string(TOLOWER "${_actual_hash}" _actual_hash)
-    string(TOLOWER "${_hash}" _expected_hash)
-    if(_actual_hash STREQUAL _expected_hash)
-      set(_need_download FALSE)
-      message(STATUS "OBSharp: ${_file} 已在缓存里，跳过下载")
-    endif()
-  endif()
-
-  if(_need_download)
-    message(STATUS "OBSharp: 下载 ${_url}")
-    # SHOW_PROGRESS 从 4.0 起是默认行为，旧版本才需要这个开关。
-    set(_obsharp_download_args STATUS _download_status TLS_VERIFY ON)
-    if(CMAKE_VERSION VERSION_LESS 4.0)
-      list(APPEND _obsharp_download_args SHOW_PROGRESS)
-    endif()
-    file(DOWNLOAD "${_url}" "${_archive}" ${_obsharp_download_args})
-    list(GET _download_status 0 _download_code)
-    if(NOT _download_code EQUAL 0)
-      list(GET _download_status 1 _download_message)
-      file(REMOVE "${_archive}")
-      message(FATAL_ERROR "下载 ${_url} 失败：${_download_message}")
-    endif()
-
-    file(SHA256 "${_archive}" _actual_hash)
-    string(TOLOWER "${_actual_hash}" _actual_hash)
-    string(TOLOWER "${_hash}" _expected_hash)
-    if(NOT _actual_hash STREQUAL _expected_hash)
-      file(REMOVE "${_archive}")
-      message(FATAL_ERROR "${_file} 校验失败：期望 SHA-256 ${_hash}，实际 ${_actual_hash}。已删除。")
-    endif()
-  endif()
-
-  message(STATUS "OBSharp: 解压 ${_file} → ${_destination_dir}")
-  # 先解到临时目录，再按「标志文件落在第几层」决定要不要把外面那层搬上来：
-  # Windows 的 CEF zip、以及 obs-deps 的三个平台包都是平的；Linux 的 CEF tar.xz
-  # 多包了一层（obs-studio 自己的 setup_ubuntu 是用 tar --strip-components 1 解的）。
-  set(_unpack_dir "${_destination_dir}.unpack")
-  file(REMOVE_RECURSE "${_unpack_dir}")
-  file(ARCHIVE_EXTRACT INPUT "${_archive}" DESTINATION "${_unpack_dir}")
-
-  if(EXISTS "${_unpack_dir}/${_sentinel}")
-    set(_payload "${_unpack_dir}")
-  else()
-    file(GLOB _nested RELATIVE "${_unpack_dir}" "${_unpack_dir}/*/${_sentinel}")
-    list(LENGTH _nested _nested_count)
-    if(NOT _nested_count EQUAL 1)
-      message(
-        FATAL_ERROR
-          "解压后没在 ${_unpack_dir} 里找到 ${_sentinel}（找到 ${_nested_count} 个候选）；"
-          "obs-studio 的包结构可能变了。"
-      )
-    endif()
-    list(GET _nested 0 _nested_first)
-    # 形如 cef_binary_.../include/cef_version.h，取第一段就是外层目录名。
-    string(REGEX REPLACE "/.*$" "" _nested_root "${_nested_first}")
-    set(_payload "${_unpack_dir}/${_nested_root}")
-  endif()
-
-  file(REMOVE_RECURSE "${_destination_dir}")
-  file(RENAME "${_payload}" "${_destination_dir}")
-  file(REMOVE_RECURSE "${_unpack_dir}")
-
-  if(NOT EXISTS "${_destination_dir}/${_sentinel}")
-    message(
-      FATAL_ERROR
-        "解压后没找到 ${_destination_dir}/${_sentinel}；obs-studio 的包结构可能变了。")
-  endif()
-
-  set(${out_dir} "${_destination_dir}" PARENT_SCOPE)
-endfunction()
-
-# ---------------------------------------------------------------------------
-# 编排
-# ---------------------------------------------------------------------------
-
-# CEF：CEF_ROOT_DIR 指向的目录里真有一份 CEF 才不动（不能用「变量有没有值」判断，
-# 因为这个缓存变量本身就是本模块写的，重启 configure 时也是有值的）。
-if(CEF_ROOT_DIR AND EXISTS "${CEF_ROOT_DIR}/include/cef_version.h")
-  message(STATUS "OBSharp: 用已有的 CEF_ROOT_DIR=${CEF_ROOT_DIR}")
-else()
-  if(CEF_ROOT_DIR)
-    message(STATUS "OBSharp: CEF_ROOT_DIR=${CEF_ROOT_DIR} 里没有 CEF，改用 lib/deps")
-  endif()
-  _obsharp_ensure(cef _obsharp_cef_dir)
-  set(CEF_ROOT_DIR "${_obsharp_cef_dir}" CACHE PATH "CEF 根目录（由 cmake/ObSharpDeps.cmake 设置）" FORCE)
-endif()
-
-# Qt6：CMAKE_PREFIX_PATH 里已经有就跳过；Linux 用发行版包。
-if(_obsharp_os STREQUAL "linux")
-  message(STATUS "OBSharp: Linux 的 Qt6 用发行版包（qt6-base-dev 之类）")
-else()
-  set(_obsharp_have_qt6 FALSE)
-  foreach(_prefix IN LISTS CMAKE_PREFIX_PATH)
-    if(EXISTS "${_prefix}/lib/cmake/Qt6/Qt6Config.cmake")
-      set(_obsharp_have_qt6 TRUE)
-      break()
-    endif()
-  endforeach()
-
-  if(_obsharp_have_qt6)
-    message(STATUS "OBSharp: 用 CMAKE_PREFIX_PATH 里已有的 Qt6")
-  else()
-    _obsharp_ensure(qt6 _obsharp_qt6_dir)
-    list(APPEND CMAKE_PREFIX_PATH "${_obsharp_qt6_dir}")
-    list(REMOVE_DUPLICATES CMAKE_PREFIX_PATH)
-
-    # Windows arm64 是在 x64 机器上交叉编译的：目标那份 Qt6 的 moc / rcc / uic 是 arm64
-    # 的可执行文件，跑不动。CMake 靠 QT_HOST_PATH 找能在 host 上跑的那份（obs-studio 的
-    # _handle_qt_cross_compile 就是这么干的，我们照抄：目标架构用 ARM64 的包，
-    # host tools 用 x64 的包，两个包版本必须一致）。
-    if(_obsharp_os STREQUAL "windows" AND _obsharp_arch STREQUAL "arm64")
-      _obsharp_ensure(qt6 _obsharp_qt6_host_dir ARCH x64)
-      set(QT_HOST_PATH
-          "${_obsharp_qt6_host_dir}"
-          CACHE PATH "Qt6 host tools（Windows arm64 交叉编译用）" FORCE)
-      # 让 Qt6 的 CMake 走 host info 检查（跨架构时必须的，见 Qt6Dependencies.cmake）。
-      set(QT_REQUIRE_HOST_PATH_CHECK
-          TRUE
-          CACHE STRING "Qt Host Tools Check Required"
-          FORCE)
-      message(STATUS "OBSharp: Qt6 host tools（x64）→ ${_obsharp_qt6_host_dir}")
-    endif()
-  endif()
-
-  # 自己给了 Qt6、又要交叉编译 arm64 的，host tools 得自己指（我们不去覆盖用户的设置）。
-  if(_obsharp_have_qt6
-     AND _obsharp_os STREQUAL "windows"
-     AND _obsharp_arch STREQUAL "arm64"
-     AND NOT DEFINED QT_HOST_PATH)
-    message(
-      STATUS
-        "OBSharp: Windows arm64 交叉编译需要 x64 的 Qt6 host tools，记得设 QT_HOST_PATH（moc / rcc / uic 跑不动 arm64 的那份）"
-    )
-  endif()
-endif()
+include("${CMAKE_CURRENT_LIST_DIR}/cef.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/qt6.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/simde.cmake")

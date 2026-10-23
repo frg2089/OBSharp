@@ -228,11 +228,14 @@ jobs:
       - name: 编译 Native 项目
         run: cmake --build --preset ${{ matrix.rid }}-release
 
+      - name: 还原 Loader 项目
+        run: dotnet restore src/OBSharp.Loader --runtime ${{ matrix.rid }} --graph --artifacts-path artifacts
+
       - name: 编译 Loader 项目
-        run: dotnet build src/OBSharp.Loader --graph --artifacts-path artifacts --configuration Release --framework ${{ env.DOTNET_TARGET_FRAMEWORK }} --no-restore
+        run: dotnet build src/OBSharp.Loader --runtime ${{ matrix.rid }} --graph --artifacts-path artifacts --configuration Release --framework ${{ env.DOTNET_TARGET_FRAMEWORK }} --no-restore
 
       - name: 以 NativeAOT 发布 Loader
-        run: dotnet publish src/OBSharp.Loader --graph --artifacts-path artifacts --configuration Release --framework ${{ env.DOTNET_TARGET_FRAMEWORK }} --no-restore --no-build
+        run: dotnet publish src/OBSharp.Loader --runtime ${{ matrix.rid }} --graph --artifacts-path artifacts --configuration Release --framework ${{ env.DOTNET_TARGET_FRAMEWORK }} --no-restore --no-build
 
       - name: 上传 Native 库
         uses: actions/upload-artifact@v7
