@@ -112,7 +112,9 @@ namespace OBSharp::Cef
 
         CefRefPtr<CefBrowserHost> host = browser->GetHost();
         CefWindowInfo window_info;
+#ifdef _WIN32
         window_info.SetAsPopup(host->GetWindowHandle(), "OB# DevTools");
+#endif
         window_info.bounds = bounds_;
 
         // 与 obs-browser 右键「检查」完全同一条通路：client 用浏览器自己的
