@@ -30,7 +30,7 @@ namespace OBSharp.Interop.UI.Internal;
 /// 通常是整个进程直接没了）。所以每个回调都整体包在 try/catch 里，出错就用返回值表达。
 /// </para>
 /// </remarks>
-internal static unsafe class SchemeHandlerBridge
+internal static partial class SchemeHandlerBridge
 {
     /// <summary>
     /// 页面 -&gt; 原生 的消息通道地址（POST 到这里就是 bridge 消息，不往 Kestrel 转）。
@@ -52,7 +52,7 @@ internal static unsafe class SchemeHandlerBridge
     /// 每请求状态，key 是 handler 指针（原生侧保证同一个请求的 handle 稳定、
     /// 且 <see cref="OnDestroy"/> 一定来一次）。
     /// </summary>
-    private static readonly ConcurrentDictionary<nint, NativeRequestState> Requests = new();
+    private static readonly ConcurrentDictionary<nint, HttpResponse> Requests = new();
 
     /// <summary>
     /// domain -&gt; 页面消息接收者。scheme handler 是按 (scheme, domain) 全局注册的，
@@ -87,7 +87,7 @@ internal static unsafe class SchemeHandlerBridge
     /// 集中在一个地方：字段声明处直接写 <c>&amp;OnOpen</c> 也能编过，但可读性差，
     /// 而且以后加回调时容易漏。
     /// </remarks>
-    private static ObsharpResourceHandlerCallbacks CreateCallbacks() => new()
+    private static unsafe ObsharpResourceHandlerCallbacks CreateCallbacks() => new()
     {
         User = 0,
         OnOpen = &OnOpen,
@@ -188,7 +188,7 @@ internal static unsafe class SchemeHandlerBridge
     /// 请求到达。返回 0 表示成功（接着走 <see cref="GetResponseHeaders"/>），负数表示失败。
     /// </summary>
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static int OnOpen(nint user, nint handler, byte* method, byte* url, ObsharpRequestHeader* headers,
+    private static unsafe int OnOpen(nint user, nint handler, byte* method, byte* url, ObsharpRequestHeader* headers,
         int headerCount, nint body, int bodyLength)
     {
         try
@@ -221,48 +221,41 @@ internal static unsafe class SchemeHandlerBridge
             request.Host = host;
             request.Target = target;
 
-            var state = new NativeRequestState();
-            Requests[handler] = state;
-
             // 3. 页面 -> 原生 的消息通道：拦下 POST /__obsharp/message，不往 Kestrel 转。
             if (IsMessageRequest(request))
             {
                 DispatchMessage(host, Encoding.UTF8.GetString(request.Body));
 
                 // 204 + 无 body：页面那边只关心「消息发出去了」，不需要响应内容。
-                state.Complete(new HttpResponseHead
-                {
-                    Status = 204,
-                    StatusText = "No Content",
-                    Framing = HttpFraming.None,
-                    ContentLength = 0,
-                }, Array.Empty<byte>());
-
-                LogRequest(requestMethod, requestUrl, state);
+                HttpResponse done = HttpResponse.Completed(204, "No Content", HttpFraming.None, []);
+                Requests[handler] = done;
+                LogRequest(requestMethod, requestUrl, done);
                 return 0;
             }
 
-            // 4. 起后台工作：连 Kestrel、拿响应头、然后把 body 流式搬过来。
-            //
-            // 连接目标来自 factory 注册时的那一份，不从 URL 推——同一个 Kestrel 可以被
-            // 好几个 domain 共用，而「哪个 domain 用哪个端点」只有注册时才知道。
-            // 用 URL 里的 host 拼成 domain 去查（url 形如 https://<host>.obsharp/...，
-            // 所以 host 就是 <host>.obsharp）。
+            // 4. 发请求收响应。连接目标来自 factory 注册时的那一份，不从 URL 推——同一个
+            //    Kestrel 可以被好几个 domain 共用，而「哪个 domain 用哪个端点」只有注册时
+            //    才知道。用 URL 里的 host 拼成 domain 去查（url 形如
+            //    https://<host>.obsharp/...，所以 host 就是 <host>.obsharp）。
             Endpoint? endpoint = TryGetEndpointForDomain(host, out Endpoint registered) ? registered : null;
 
-            _ = Task.Run(() => RunWorker(handler, state, endpoint, request));
+            HttpResponse response = SendRequest(endpoint, request);
 
-            // 5. 阻塞等响应头。旧代码也是这样：Open() 同步完成，handle_request 置真返回 true，
-            //    不借助 callback——CEF 的 GetResponseHeaders 紧接着就会被调用，
-            //    那时候必须已经能读到状态码和头，否则只能瞎猜。
-            if (!state.WaitForHead(HeadTimeoutMilliseconds))
+            // 5. 登记 + 挂 CEF 唤醒。Open() 同步完成（旧代码也是这样）：返回时响应头必须
+            //    已经可用，CEF 的 GetResponseHeaders 紧接着就会被调用，那时候必须已经能读到
+            //    状态码和头，否则只能瞎猜。body 由 SendAsync 起的后台泵继续灌进响应。
+            Requests[handler] = response;
+            response.Progress = () =>
             {
-                // 超时：给 504。同时标记取消并关掉会话，否则后台任务拿到头之后还会继续
-                // 往一个已经当错误处理掉的缓冲里追加数据（旧代码这里会把两段内容混在一起）。
-                state.ServeError(504, "Kestrel endpoint did not respond within 30s");
-            }
+                // 每批 body 就绪 / 结束都唤醒挂起的读和 Skip（没有挂起时是空操作）。
+                // 原生侧会把 resume 封送到 CEF 的 IO 线程上，在那里调回我们的 Read。
+                WakeRead(handler, response);
+                WakeSkip(handler, response);
+            };
+            WakeRead(handler, response);
+            WakeSkip(handler, response);
 
-            LogRequest(requestMethod, requestUrl, state);
+            LogRequest(requestMethod, requestUrl, response);
             return 0;
         }
         catch (Exception exception)
@@ -282,7 +275,7 @@ internal static unsafe class SchemeHandlerBridge
     {
         try
         {
-            if (!Requests.TryGetValue(handler, out NativeRequestState? state))
+            if (!Requests.TryGetValue(handler, out HttpResponse? state))
             {
                 // 状态不在了（被 Cancel/Destroy 抢先清掉）：给一个最小可用的 502，
                 // 让 CEF 有一个确定的响应，而不是拿空响应去渲染。
@@ -291,18 +284,13 @@ internal static unsafe class SchemeHandlerBridge
                 return 0;
             }
 
-            HttpResponseHead head = state.SnapshotHead();
-
             // 状态码 0 说明连状态行都没读到（比如超时路径只写了错误信息）：
             // 按旧代码的做法补成 502，而不是把 0 交给 CEF。
-            if (head.Status == 0)
-                head.Status = 502;
+            AbiApi.Response(response).SetStatus(state.Status == 0 ? 502 : state.Status);
+            if (!string.IsNullOrEmpty(state.StatusText))
+                AbiApi.Response(response).SetStatusText(state.StatusText);
 
-            AbiApi.Response(response).SetStatus(head.Status);
-            if (!string.IsNullOrEmpty(head.StatusText))
-                AbiApi.Response(response).SetStatusText(head.StatusText);
-
-            SetResponseHeaders(response, head);
+            SetResponseHeaders(response, state);
 
             // 关键：MIME 类型必须单独设。
             //
@@ -310,7 +298,7 @@ internal static unsafe class SchemeHandlerBridge
             // 塞进 header map，CEF 的加载器读的是 GetMimeType()，拿不到就按未知类型处理——
             // 结果是 HTML 不会被解析成文档，页面停在 about:blank（或纯文本）。
             // 所以从 header 里取出来单独设一遍。
-            string? mime = head.HeaderValue("Content-Type");
+            string? mime = state.TryGetHeader("Content-Type", out string? contentType) ? contentType : null;
             if (!string.IsNullOrEmpty(mime))
             {
                 // 去掉 "; charset=utf-8" 这类参数：SetMimeType 只接受类型本身。
@@ -318,9 +306,9 @@ internal static unsafe class SchemeHandlerBridge
                 AbiApi.Response(response).SetMimeType(semicolon < 0 ? mime : mime[..semicolon]);
             }
 
-            return head.Framing switch
+            return state.Framing switch
             {
-                HttpFraming.Length => head.ContentLength,
+                HttpFraming.Length => state.ContentLength ?? 0,
                 HttpFraming.None => 0,
                 // Chunked / UntilClose：长度未知，读到 Read 返回负数为止。
                 _ => -1,
@@ -337,17 +325,17 @@ internal static unsafe class SchemeHandlerBridge
     /// 读 body。返回实际写入的字节数；0 = 暂时没数据（原生侧挂起）；负数 = body 结束。
     /// </summary>
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static int Read(nint user, nint handler, nint buffer, int size)
+    private static unsafe int Read(nint user, nint handler, nint buffer, int size)
     {
         try
         {
             if (buffer is 0)
                 return -1;
 
-            if (!Requests.TryGetValue(handler, out NativeRequestState? state))
+            if (!Requests.TryGetValue(handler, out HttpResponse? state))
                 return -1;
 
-            return state.Read((byte*)buffer, size);
+            return state.Read(new Span<byte>((void*)buffer, size));
         }
         catch (Exception exception)
         {
@@ -361,14 +349,14 @@ internal static unsafe class SchemeHandlerBridge
     /// （原生侧挂起，之后由后台任务调 <c>resume_skip</c>，参数是 <b>累计</b>跳过字节数）。
     /// </summary>
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static int Skip(nint user, nint handler, long bytesToSkip, long* skipped)
+    private static unsafe int Skip(nint user, nint handler, long bytesToSkip, long* skipped)
     {
         try
         {
             if (skipped is not null)
                 *skipped = 0;
 
-            if (!Requests.TryGetValue(handler, out NativeRequestState? state))
+            if (!Requests.TryGetValue(handler, out HttpResponse? state))
                 return -1;
 
             long taken = state.TrySkip(bytesToSkip, out bool pending);
@@ -399,9 +387,9 @@ internal static unsafe class SchemeHandlerBridge
     {
         try
         {
-            if (Requests.TryGetValue(handler, out NativeRequestState? state))
+            if (Requests.TryGetValue(handler, out HttpResponse? state))
             {
-                // 标记 + 关连接：阻塞在 ReadBody 里的后台任务会立刻带着异常返回，
+                // 标记 + 关连接：正在灌 body 的后台泵会立刻带着异常退出，
                 // 不会继续往缓冲里塞没人要的数据。
                 state.Cancel();
             }
@@ -420,7 +408,7 @@ internal static unsafe class SchemeHandlerBridge
     {
         try
         {
-            if (Requests.TryRemove(handler, out NativeRequestState? state))
+            if (Requests.TryRemove(handler, out HttpResponse? state))
                 state.Dispose();
         }
         catch (Exception exception)
@@ -433,87 +421,8 @@ internal static unsafe class SchemeHandlerBridge
 
     #region 工作线程
 
-    /// <summary>
-    /// 后台工作：连 Kestrel -> 拿响应头 -> 循环读 body。全部在 Task 里跑，
-    /// 阻塞无所谓（CEF 的 IO 线程绝对不会被它挡住）。
-    /// </summary>
-    private static void RunWorker(nint handler, NativeRequestState state, Endpoint? endpoint, HttpRequest request)
-    {
-        if (endpoint is null)
-        {
-            state.ServeError(502, "Kestrel endpoint unavailable: no endpoint is registered for this domain");
-            WakeRead(handler, state);
-            return;
-        }
-
-        KestrelSession? session;
-        HttpResponseHead? head;
-        try
-        {
-            session = KestrelSession.Start(endpoint, request, out head, out string? startError);
-            if (session is null || head is null)
-            {
-                state.ServeError(502, "Kestrel endpoint unavailable: " + startError);
-                WakeRead(handler, state);
-                return;
-            }
-        }
-        catch (Exception exception)
-        {
-            state.ServeError(502, "Kestrel endpoint unavailable: " + exception.Message);
-            WakeRead(handler, state);
-            return;
-        }
-
-        // 头已经拿到：交给 OnOpen（它可能还在等）和 GetResponseHeaders。
-        state.SetHead(head, session);
-        WakeRead(handler, state);
-
-        byte[] buffer = new byte[ReadChunkSize];
-        for (; ; )
-        {
-            if (state.IsCancelled)
-                return;
-
-            int read;
-            try
-            {
-                read = session.ReadBody(buffer, out string? readError);
-                if (read < 0)
-                {
-                    state.Fail(readError);
-                    break;
-                }
-            }
-            catch (Exception exception)
-            {
-                // 会话在别的线程被关掉（Cancel）时会走到这里：记下原因就退出，
-                // 不再把它当正常数据。
-                state.Fail(exception.Message);
-                break;
-            }
-
-            if (read == 0)
-            {
-                state.Finish();
-                break;
-            }
-
-            state.Append(buffer.AsSpan(0, read));
-
-            // 读完一块就唤醒挂起的读：原生侧会把这次 resume 封送到 CEF 的 IO 线程上，
-            // 在那里调回我们的 Read。没有挂起的读时它是空操作，所以可以放心每次都调。
-            WakeRead(handler, state);
-
-            // Skip 也要在这里推进：旧代码的 ResumeTask 同时处理 pendingRead 和 pendingSkip。
-            WakeSkip(handler, state);
-        }
-
-        // 结束（正常或出错）后再各唤醒一次：挂起的 Read 会发现「没数据且 finished」
-        // 从而返回 -1；挂起的 Skip 会带着累计值完成。
-        WakeRead(handler, state);
-        WakeSkip(handler, state);
-    }
+    // body 泵不在这层：它跟连接走，见 KestrelConnection.SendAsync / PumpBodyAsync。
+    // 这里只剩「唤醒 CEF 挂起的读 / Skip」两个转发。
 
     /// <summary>
     /// 唤醒挂起的读，把当前可读字节数带过去。
@@ -522,7 +431,7 @@ internal static unsafe class SchemeHandlerBridge
     /// 报告的是「缓冲里现在有多少」，因为 CEF 的 <c>ReadCallback::Continue(bytesAvailable)</c>
     /// 语义就是可用字节数（旧代码 ResumeTask 里也是这么算的）。
     /// </remarks>
-    private static void WakeRead(nint handler, NativeRequestState state)
+    private static void WakeRead(nint handler, HttpResponse state)
     {
         int available = state.AvailableForResume();
         AbiApi.Handler(handler).ResumeRead(available);
@@ -536,7 +445,7 @@ internal static unsafe class SchemeHandlerBridge
     /// <b>累计</b>已跳过字节数，不是这次新跳了多少——CEF 的 <c>SkipCallback::Continue</c>
     /// 本来就是累计语义，传增量会让 Range 请求整体错位。
     /// </remarks>
-    private static void WakeSkip(nint handler, NativeRequestState state)
+    private static void WakeSkip(nint handler, HttpResponse state)
     {
         if (!state.ServicePendingSkip(out long cumulativeSkipped))
             return;
@@ -713,7 +622,7 @@ internal static unsafe class SchemeHandlerBridge
     /// 远不如「看到的一定是当前构建」重要 —— 顺带的好处是改前端资源不必再手动清缓存。
     /// </para>
     /// </remarks>
-    private static void SetResponseHeaders(nint response, HttpResponseHead head)
+    private static unsafe void SetResponseHeaders(nint response, HttpResponse head)
     {
         var kept = new List<KeyValuePair<string, string>>(head.Headers.Count);
         foreach (KeyValuePair<string, string> header in head.Headers)
@@ -757,7 +666,7 @@ internal static unsafe class SchemeHandlerBridge
     /// 把字符串编成 NUL 结尾的 UTF-8，分配在非托管堆上（调用方负责
     /// <see cref="Marshal.FreeHGlobal"/>）。
     /// </summary>
-    private static byte* AllocateUtf8(string text, out nint block)
+    private static unsafe byte* AllocateUtf8(string text, out nint block)
     {
         int byteCount = Encoding.UTF8.GetByteCount(text);
         block = Marshal.AllocHGlobal(byteCount + 1);
@@ -806,16 +715,16 @@ internal static unsafe class SchemeHandlerBridge
     /// <summary>
     /// 读一个 NUL 结尾的 UTF-8 借用指针；空指针返回 <see langword="null"/>。
     /// </summary>
-    private static string? Utf8ToString(byte* text)
+    private static unsafe string? Utf8ToString(byte* text)
         => text is null ? null : Marshal.PtrToStringUTF8((nint)text);
 
     /// <summary>
     /// 拷一份原生侧的字节块；空指针 / 非正长度当空数组。
     /// </summary>
-    private static byte[] CopyBytes(void* data, int length)
+    private static unsafe byte[] CopyBytes(void* data, int length)
     {
         if (data is null || length <= 0)
-            return Array.Empty<byte>();
+            return [];
 
         byte[] copy = new byte[length];
         fixed (byte* destination = copy)
@@ -831,12 +740,11 @@ internal static unsafe class SchemeHandlerBridge
     /// 每条请求一行：排查「页面停在 about:blank / 空白页」时，先看这里有没有子资源请求
     /// （<c>_framework/blazor.web.js</c>、<c>*.css</c>、<c>/_blazor/negotiate</c>）以及状态码。
     /// </remarks>
-    private static void LogRequest(string method, string url, NativeRequestState state)
+    private static void LogRequest(string method, string url, HttpResponse state)
     {
-        HttpResponseHead head = state.SnapshotHead();
         string? error = state.Error;
 
-        string text = method + " " + url + " -> " + head.Status.ToString();
+        string text = method + " " + url + " -> " + state.Status.ToString();
         if (!string.IsNullOrEmpty(error))
             text += " (" + error + ")";
 
@@ -863,427 +771,36 @@ internal static unsafe class SchemeHandlerBridge
     #endregion
 
     /// <summary>
-    /// 一次请求的共享状态：后台任务往里写，CEF 的 IO 线程往外读。
+    /// 发请求收响应：「Request -&gt; Response」，旧 <c>RunWorkerAsync</c> 的职责收敛在这里。
+    /// 同步阻塞到响应头就绪（CEF 的 Open 契约要求返回时头已经可用）；body 在返回后
+    /// 由 <see cref="KestrelConnection.SendAsync"/> 起的后台泵继续灌进响应对象。
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// 对应旧 C++ 的 <c>Stream</c>。缓冲与状态都由 <see cref="Gate"/> 保护；
-    /// <c>pendingSkip*</c> 只在 IO 线程上读写（后台任务只负责「发现够了就续上」）。
-    /// </para>
-    /// <para>
-    /// 旧代码用 <c>std::mutex</c> + <c>condition_variable</c>；这里换成 <see cref="Monitor"/>
-    /// 加一个 <see cref="ManualResetEventSlim"/>：条件变量那种「唤醒后重新检查谓词」的写法
-    /// 在 C# 里没有语言支持，用事件更不容易写错。
-    /// </para>
-    /// </remarks>
-    private sealed class NativeRequestState : IDisposable
+    private static HttpResponse SendRequest(Endpoint? endpoint, HttpRequest request)
     {
-        /// <summary>保护下面所有字段的锁。</summary>
-        private readonly object Gate = new();
+        if (endpoint is null)
+            return HttpResponse.FromError(502, "Kestrel endpoint unavailable: no endpoint is registered for this domain");
 
-        /// <summary>「响应头已经可用」的信号（OnOpen 等它）。</summary>
-        private readonly ManualResetEventSlim HeadReady = new(false);
+        KestrelConnection? connection = KestrelConnection.Connect(endpoint, out string? connectError);
+        if (connection is null)
+            return HttpResponse.FromError(502, "Kestrel endpoint unavailable: " + connectError);
 
-        private HttpResponseHead? _head;
-        private KestrelSession? _session;
-
-        /// <summary>已经缓冲、还没交给 CEF 的 body 字节。</summary>
-        private byte[] _buffer = Array.Empty<byte>();
-        private int _length;
-        private int _offset;
-
-        private bool _finished;
-        private bool _cancelled;
-        private bool _disposed;
-        private string? _error;
-
-        // Skip 的挂起状态：只有 CEF IO 线程写，后台任务在 ServicePendingSkip 里读/推进。
-        private bool _skipPending;
-        private long _skipRemaining;
-        private long _skipTotal;
-
-        /// <summary>响应头（给 <see cref="GetResponseHeaders"/> 用；没有时返回一个 502 占位）。</summary>
-        public HttpResponseHead SnapshotHead()
+        Task<HttpResponse> pending = connection.SendAsync(request);
+        try
         {
-            lock (Gate)
-            {
-                return _head ?? new HttpResponseHead { Status = 502, StatusText = "Bad Gateway" };
-            }
+            if (pending.Wait(HeadTimeoutMilliseconds))
+                return pending.Result;
+        }
+        catch (Exception exception)
+        {
+            connection.Close();
+            return HttpResponse.FromError(502, "Kestrel endpoint unavailable: " +
+                (exception.InnerException ?? exception).Message);
         }
 
-        /// <summary>当前错误原因（没有则为 <see langword="null"/>）。</summary>
-        public string? Error
-        {
-            get
-            {
-                lock (Gate)
-                    return _error;
-            }
-        }
-
-        /// <summary>body 是否已经结束（正常结束或出错都算）。</summary>
-        public bool IsFinished
-        {
-            get
-            {
-                lock (Gate)
-                    return _finished;
-            }
-        }
-
-        /// <summary>是否已经被取消。</summary>
-        public bool IsCancelled
-        {
-            get
-            {
-                lock (Gate)
-                    return _cancelled;
-            }
-        }
-
-        /// <summary>等响应头；超时返回 <see langword="false"/>。</summary>
-        public bool WaitForHead(int millisecondsTimeout)
-        {
-            try
-            {
-                return HeadReady.Wait(millisecondsTimeout);
-            }
-            catch (ObjectDisposedException)
-            {
-                // Destroy 抢先销毁了事件：当作「头已经没意义了」。
-                return true;
-            }
-        }
-
-        /// <summary>后台任务拿到响应头：交给 OnOpen / GetResponseHeaders，并启动 body 流。</summary>
-        public void SetHead(HttpResponseHead head, KestrelSession session)
-        {
-            lock (Gate)
-            {
-                // 已经被取消 / 已经被 ServeError 抢答：会话没人要了，直接关掉，
-                // 免得泄漏连接（旧代码靠析构函数兜底）。
-                if (_cancelled || _finished)
-                {
-                    session.Close();
-                    return;
-                }
-
-                _head = head;
-                _session = session;
-            }
-
-            HeadReady.Set();
-        }
-
-        /// <summary>
-        /// 直接给一个错误响应（502 / 504）：不需要连 Kestrel，body 就是错误文本。
-        /// </summary>
-        /// <remarks>
-        /// 注意这里<b>不</b>置 <see cref="_cancelled"/>：错误响应本身还是要交给页面的
-        /// （502 的文本就是排查线索），<see cref="Read"/> 必须能把它读出去。
-        /// 只靠 <see cref="_finished"/> 把「后台还在读的那条连接」掐掉：<see cref="Append"/>
-        /// 见到 finished 就不再往缓冲里追加，工作循环下一轮也会立刻退出。
-        /// </remarks>
-        public void ServeError(int status, string message)
-        {
-            byte[] body = Encoding.UTF8.GetBytes(message);
-
-            lock (Gate)
-            {
-                if (_finished)
-                    return;
-
-                _error = message;
-                _head = new HttpResponseHead
-                {
-                    Status = status,
-                    StatusText = status == 504 ? "Gateway Timeout" : "Bad Gateway",
-                    Framing = HttpFraming.Length,
-                    ContentLength = body.Length,
-                };
-
-                _buffer = body;
-                _length = body.Length;
-                _offset = 0;
-                _finished = true;
-
-                // 正在读 Kestrel 的那条连接没人要了：关掉它，让后台任务马上退出，
-                // 而不是继续往这个「错误响应」的缓冲里追加真正的响应数据。
-                _session?.Close();
-                _session = null;
-            }
-
-            HeadReady.Set();
-        }
-
-        /// <summary>
-        /// 直接给一个完整响应（204 No Content 那条路径）。
-        /// </summary>
-        public void Complete(HttpResponseHead head, byte[] body)
-        {
-            lock (Gate)
-            {
-                _head = head;
-                _buffer = body;
-                _length = body.Length;
-                _offset = 0;
-                _finished = true;
-                _error = null;
-            }
-
-            HeadReady.Set();
-        }
-
-        /// <summary>追加后台读到的一段 body。</summary>
-        public void Append(ReadOnlySpan<byte> data)
-        {
-            if (data.Length == 0)
-                return;
-
-            lock (Gate)
-            {
-                if (_cancelled || _finished)
-                    return;
-
-                if (_length + data.Length > _buffer.Length)
-                {
-                    int grow = Math.Max(_buffer.Length * 2, _length + data.Length);
-                    Array.Resize(ref _buffer, Math.Max(grow, ReadChunkSize));
-                }
-
-                data.CopyTo(_buffer.AsSpan(_length));
-                _length += data.Length;
-            }
-        }
-
-        /// <summary>body 正常结束。</summary>
-        public void Finish()
-        {
-            lock (Gate)
-                _finished = true;
-        }
-
-        /// <summary>body 出错结束。</summary>
-        public void Fail(string? error)
-        {
-            lock (Gate)
-            {
-                _error = error;
-                _finished = true;
-            }
-        }
-
-        /// <summary>
-        /// CEF 侧读：有数据就拷走；结束了返回 -1；暂时没数据返回 0（原生侧会挂起这次读）。
-        /// </summary>
-        /// <remarks>
-        /// 这里返回 0 而<b>不是</b> -1 是旧代码用血换来的教训：按 <c>cef_resource_handler.h</c>
-        /// 的契约，「还没数据」必须是「置 bytes_read = 0、稍后执行 callback」，
-        /// 返回 false 会被 CEF 当成「响应已经结束」，页面就被截断在缓冲区末尾
-        /// （实测表现：DOM 停在 HTML 实体中间，比如 "...OB# 插&amp;#..."）。
-        /// 原生侧对此的约定是：Read 返回 0 就挂起，之后由我们
-        /// <c>obsharp_resource_handler_resume_read</c> 续上。
-        /// </remarks>
-        public int Read(byte* buffer, int size)
-        {
-            lock (Gate)
-            {
-                // 只有「被 CEF 取消」才立刻结束。ServeError 设的 _aborted 不算：
-                // 502/504 的正文还是要读给页面看的。
-                if (_cancelled)
-                    return -1;
-
-                int available = _length - _offset;
-                if (available > 0)
-                {
-                    int count = size <= 0 ? available : Math.Min(available, size);
-                    Marshal.Copy(_buffer, _offset, (nint)buffer, count);
-                    _offset += count;
-                    CompactLocked();
-                    return count;
-                }
-
-                // body 已经收完、缓冲也空了：响应结束。只有这里才返回负数。
-                if (_finished)
-                    return -1;
-
-                // 还没数据（后台任务在读 Kestrel）：返回 0 让原生侧挂起这次读。
-                return 0;
-            }
-        }
-
-        /// <summary>
-        /// CEF 侧跳过若干字节。
-        /// </summary>
-        /// <param name="bytesToSkip">这次要跳过的总字节数。</param>
-        /// <param name="pending">
-        /// <see langword="true"/> 表示没跳够、且 body 还没结束：调用方应返回 0 让原生侧挂起，
-        /// 之后由后台任务用 <see cref="ServicePendingSkip"/> 推进。
-        /// </param>
-        /// <returns>本次实际跳掉的字节数。</returns>
-        /// <remarks>
-        /// 「跳不够就挂起」和「记下还差多少」必须放在同一个锁里：拆成两步的话，
-        /// 后台任务可能正好在两步之间追加了数据并唤醒一次（那次唤醒会落空，
-        /// 于是这次 Skip 永远等不到下一次唤醒——CEF 那边就是卡住不动的页面）。
-        /// </remarks>
-        public long TrySkip(long bytesToSkip, out bool pending)
-        {
-            pending = false;
-
-            if (bytesToSkip <= 0)
-                return 0;
-
-            lock (Gate)
-            {
-                if (_cancelled)
-                    return 0;
-
-                int available = _length - _offset;
-                int take = (int)Math.Min(available, bytesToSkip);
-                _offset += take;
-                CompactLocked();
-
-                long remaining = bytesToSkip - take;
-
-                // 跳够了，或者 body 已经结束（没得跳了也算完成，CEF 会按范围不可满足处理）。
-                if (remaining <= 0 || _finished)
-                    return take;
-
-                _skipPending = true;
-                _skipTotal = bytesToSkip;
-                _skipRemaining = remaining;
-                pending = true;
-                return take;
-            }
-        }
-
-        /// <summary>是否还有挂起的 Skip 在等数据。</summary>
-        public bool HasPendingSkip
-        {
-            get
-            {
-                lock (Gate)
-                    return _skipPending;
-            }
-        }
-
-        /// <summary>
-        /// 推进挂起的 Skip。返回 <see langword="true"/> 表示这次 Skip 可以完成了，
-        /// <paramref name="cumulativeSkipped"/> 是要传给 <c>resume_skip</c> 的<b>累计</b>值。
-        /// </summary>
-        public bool ServicePendingSkip(out long cumulativeSkipped)
-        {
-            cumulativeSkipped = 0;
-
-            lock (Gate)
-            {
-                if (!_skipPending)
-                    return false;
-
-                int available = _length - _offset;
-                if (available > 0 && _skipRemaining > 0)
-                {
-                    int take = (int)Math.Min(available, _skipRemaining);
-                    _offset += take;
-                    _skipRemaining -= take;
-                    CompactLocked();
-                }
-
-                // 还没跳够，且 body 还没结束：等下一批数据。
-                if (_skipRemaining > 0 && !_finished)
-                    return false;
-
-                // 跳够了，或者没得跳了（CEF 会按「范围不可满足」处理剩下的部分）。
-                cumulativeSkipped = _skipTotal - _skipRemaining;
-                _skipPending = false;
-                _skipTotal = 0;
-                _skipRemaining = 0;
-                return true;
-            }
-        }
-
-        /// <summary>挂起中的读能拿到多少字节（给 <c>resume_read</c> 用）。</summary>
-        public int AvailableForResume()
-        {
-            lock (Gate)
-                return Math.Min(_length - _offset, int.MaxValue);
-        }
-
-        /// <summary>
-        /// 取消：标记 + 关连接。关连接放在锁外面——它会打断正在阻塞的读，
-        /// 期间不持有锁可以避免和后台任务的 <see cref="Fail"/> 抢锁。
-        /// </summary>
-        public void Cancel()
-        {
-            KestrelSession? session;
-            lock (Gate)
-            {
-                _cancelled = true;
-                session = _session;
-                _session = null;
-            }
-
-            session?.Close();
-            HeadReady.Set(); // OnOpen 可能还在等：叫醒它，让它看到 cancelled。
-        }
-
-        /// <inheritdoc />
-        public void Dispose()
-        {
-            KestrelSession? session;
-
-            lock (Gate)
-            {
-                if (_disposed)
-                    return;
-
-                _disposed = true;
-                _cancelled = true;
-                session = _session;
-                _session = null;
-
-                _buffer = Array.Empty<byte>();
-                _length = 0;
-                _offset = 0;
-            }
-
-            session?.Close();
-
-            // 事件也要释放：它是带 WaitHandle 的资源。等不到的人已经被 cancelled 分支
-            // 叫醒了（Destroy 只在请求结束后才来，正常情况下没人还在等）。
-            try
-            {
-                HeadReady.Set();
-            }
-            catch (ObjectDisposedException)
-            {
-                // ignore
-            }
-
-            HeadReady.Dispose();
-        }
-
-        /// <summary>把已消费的前缀搬掉（旧 <c>CompactLocked</c>）。</summary>
-        private void CompactLocked()
-        {
-            if (_offset <= 0)
-                return;
-
-            if (_offset >= _length)
-            {
-                _length = 0;
-                _offset = 0;
-                return;
-            }
-
-            // 跟旧代码一样给个 64KB 的门槛：短响应没必要每读一次就搬一遍内存。
-            if (_offset > 64 * 1024)
-            {
-                int remaining = _length - _offset;
-                Buffer.BlockCopy(_buffer, _offset, _buffer, 0, remaining);
-                _length = remaining;
-                _offset = 0;
-            }
-        }
+        // 超时：给 504。同时关掉连接让后台泵立刻退出，否则它拿到响应头之后还会继续
+        // 往一个已经当错误处理掉的响应里灌数据（旧代码这里会把两段内容混在一起）。
+        connection.Close();
+        _ = pending.ContinueWith(static task => _ = task.Exception, TaskContinuationOptions.OnlyOnFaulted);
+        return HttpResponse.FromError(504, "Kestrel endpoint did not respond within 30s");
     }
 }
