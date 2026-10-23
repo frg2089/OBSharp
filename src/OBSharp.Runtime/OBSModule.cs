@@ -19,9 +19,9 @@ public static partial class OBSModule
     private static IHost? s_app;
 
     [UnmanagedCallersOnly]
-    public static unsafe void SetPointer(ObsModule* lpModule)
+    public static void SetPointer(nint lpModule)
     {
-        ref var module = ref Unsafe.AsRef<ObsModule>(lpModule);
+        ObsModule module = new(lpModule, false);
         var binaryPath = module.GetModuleBinaryPath();
         binaryPath = Path.GetDirectoryName(binaryPath);
         binaryPath = Path.GetDirectoryName(binaryPath);

@@ -384,7 +384,7 @@ function Invoke-BindingGeneration {
   # dotnet run：生成器随用随编。生成器是多目标项目，必须带 --framework 挑一个 TFM。
   function Invoke-Generator([string[]] $GeneratorArgs) {
     Invoke-DotNet @(@('run', '--project', 'src/OBSharp.Interop.Generator',
-        '--configuration', $Configuration, '--framework', $Framework, '--') + $GeneratorArgs)
+        '--configuration', $Configuration, '--framework', $Framework, '--property:NeedRuntimeIdentifier=True', '--') + $GeneratorArgs)
   }
 
   # ---- native ----------------------------------------------------------------
