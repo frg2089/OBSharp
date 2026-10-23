@@ -77,4 +77,21 @@ namespace OBSharp::Cef
    * 靠 widget 销毁来兜底，收养那条路径会在上下文释放之后收到信号（野指针）。
    */
   OBSHARP_API void OBSHARP_CALL obsharp_cef_widget_detach_callbacks(QCefWidget* widget);
+
+  // ===== 调试 =====
+
+  /*
+   * 弹出这个 widget 的 DevTools（与右键菜单「检查」同一条 CEF 通路）。
+   *
+   * 这不是一行转发（实现见 devtools.cpp）：要摸到 CefBrowser 只有
+   * QCefWidgetInternal::cefBrowser 一条路（CEF 没有按 widget 找浏览器的全局 API，
+   * QCefWidget 的公开虚函数里也没有 DevTools 入口），而那是 obs-browser 的内部类 ——
+   * expected_url 传 create_widget 时的 url，用它校验内部对象布局没变，对不上就
+   * 安静放弃。浏览器就绪时机由 obs-browser 自己的 Init 队列决定，这里会重试等待。
+   *
+   * 要求 Qt 主线程调用。返回 true 表示弹出流程已启动（浏览器就绪后自动弹），
+   * false 表示布局校验失败（obs-browser 版本对不上，只影响这一个调试功能）。
+   */
+  OBSHARP_API bool OBSHARP_CALL obsharp_cef_widget_show_dev_tools(QCefWidget* widget,
+    const char* expected_url);
 }

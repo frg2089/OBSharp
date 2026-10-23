@@ -115,6 +115,7 @@ add_library(
   src/logger.h
   src/obsharp.cpp
   src/obsharp.h
+  src/CEF/devtools.cpp
   src/CEF/qcef.cpp
   src/CEF/qcef.h
   src/CEF/scheme.cpp
@@ -162,6 +163,7 @@ target_include_directories(
   PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_BINARY_DIR}/include"
+    "${OBSHARP_REPO_ROOT}/lib/obs-browser"
     "${OBSHARP_REPO_ROOT}/lib/obs-browser/panel"
     "${OBSHARP_REPO_ROOT}/lib/obs-studio/libobs"
 )
