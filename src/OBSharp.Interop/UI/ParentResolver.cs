@@ -1,5 +1,3 @@
-using OBSharp.Interop.Abi;
-
 namespace OBSharp.Interop.UI;
 
 /// <summary>

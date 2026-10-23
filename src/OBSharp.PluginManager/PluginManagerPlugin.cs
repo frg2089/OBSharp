@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.Http.Connections;
 
-using OBSharp.Interop;
 using OBSharp.PluginManager.Components;
 using OBSharp.Runtime;
 

@@ -1,10 +1,11 @@
 using System.Collections.Concurrent;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 using Microsoft.Extensions.Logging;
 
 using OBSharp.Interop.Abi;
+
+
 using WindowFactory = global::OBSharp.Interop.Window;
 
 namespace OBSharp.Interop.UI;
