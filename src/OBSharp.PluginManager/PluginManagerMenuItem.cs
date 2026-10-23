@@ -30,19 +30,27 @@ public sealed class PluginManagerMenuItem(IServiceProvider serviceProvider) : IH
         var handle = GCHandle.FromIntPtr(arg0);
         var menuItem = (PluginManagerMenuItem)handle.Target!;
 
-        switch (menuItem._window)
+        try
         {
-            case { IsVisible: true }:
-                menuItem._window.Hide();
-                break;
-            case { IsVisible: false }:
-                menuItem._window.Show();
-                break;
-            case null:
-                menuItem._window = menuItem.ServiceProvider.GetRequiredService<PluginManagerWindow>();
-                if (!menuItem._window.IsVisible)
+            switch (menuItem._window)
+            {
+                case { IsVisible: true }:
+                    menuItem._window.Hide();
+                    break;
+                case { IsVisible: false }:
                     menuItem._window.Show();
-                break;
+                    break;
+                case null:
+                    menuItem._window = menuItem.ServiceProvider.GetRequiredService<PluginManagerWindow>();
+                    if (!menuItem._window.IsVisible)
+                        menuItem._window.Show();
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            menuItem.ServiceProvider.GetRequiredService<ILogger<PluginManagerMenuItem>>()
+                .LogError(ex, "Failed to toggle plugin manager window.");
         }
     }
 
