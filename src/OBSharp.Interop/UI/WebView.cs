@@ -44,7 +44,7 @@ public partial class WebView : IDisposable
 
     public event EventHandler<MessageEventArgs>? Message;
 
-    public unsafe WebView(WebViewOptions options, ILogger logger)
+    public WebView(WebViewOptions options, ILogger logger)
     {
         Logger = logger;
 
@@ -372,7 +372,7 @@ public partial class WebView : IDisposable
         return false;
     }
 
-    private static unsafe void NudgeRepaint(nint widget)
+    private static void NudgeRepaint(nint widget)
     {
         if (widget is 0)
             return;

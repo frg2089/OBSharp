@@ -8,7 +8,7 @@ namespace OBSharp.Interop.Abi;
 /// 生成绑定之上的薄便利层：主线程封送、异常翻译、原生日志回调、借用句柄包装。
 /// 只做「每次调用都必须做对」的事，业务判断一律不放这里。
 /// </summary>
-internal static unsafe class AbiApi
+internal static class AbiApi
 {
     /// <summary>接收原生库的日志行；由 UI 层的 NativeLogSink 设置。</summary>
     internal static Action<AbiLogLevel, string>? LogSink { get; set; }

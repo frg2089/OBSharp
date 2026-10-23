@@ -35,7 +35,7 @@ namespace OBSharp.Interop.UI;
 /// 所以那些参数现在在 <see cref="ShowAsync"/> 里逐条摆。对调用方完全透明。
 /// </para>
 /// </remarks>
-public static unsafe partial class FilePicker
+public static partial class FilePicker
 {
     /// <summary>
     /// <c>QFileDialog::AcceptMode</c>，按 Qt 的枚举顺序（顺序不能改）。

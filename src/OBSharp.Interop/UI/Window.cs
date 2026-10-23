@@ -138,7 +138,7 @@ public partial class Window : IDisposable
     /// </remarks>
     public event EventHandler? CloseRequested;
 
-    public unsafe Window(WindowOptions options, ILogger logger)
+    public Window(WindowOptions options, ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
