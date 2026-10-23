@@ -7,6 +7,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 using OBSharp.Interop;
+using OBSharp.Interop.Abi;
 using OBSharp.Runtime;
 
 using Host = Microsoft.Extensions.Hosting.Host;
@@ -30,10 +31,7 @@ public static partial class OBSModule
 
         // 原生库（OBSharp.Interop.Native）与托管绑定同属 OBSharp.Interop 程序集，所以
         // 解析器挂在 OBSharp.Interop 上即可：所有 P/Invoke 都从那个程序集发起。
-        //
-        // 这里刻意不用 NativeApi 取程序集 —— 它是 internal 的（原生导入不对外暴露），
-        // 宿主看不到它。拿一个公开类型即可，两者在同一个程序集里。
-        NativeLibrary.SetDllImportResolver(typeof(Interop.UI.WebView).Assembly, NativeLibraryResolver);
+        NativeLibrary.SetDllImportResolver(typeof(AbiApi).Assembly, NativeLibraryResolver);
 
         var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings()
         {

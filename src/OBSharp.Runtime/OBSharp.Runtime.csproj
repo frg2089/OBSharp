@@ -19,5 +19,7 @@
     <ProjectReference Include="..\OBSharp.SDK\OBSharp.SDK.csproj" />
     <ProjectReference Include="..\OBSharp.Interop\OBSharp.Interop.csproj" />
   </ItemGroup>
-  
+
+  <Import Project="..\OBSharp.Interop\OBSharp.Interop.Native.targets" />
+
 </Project>

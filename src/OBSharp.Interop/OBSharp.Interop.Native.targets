@@ -1,0 +1,76 @@
+<Project>
+  <!--
+    OBSharp.Interop.Native 由 CMake 构建，不在 NuGet 资产里，SDK 生成的 .deps.json 看不到它
+    （GenerateDepsFile 只会输出 project.assets.json 里已有的 runtimeTargets）。
+    所以在 deps.json 生成之后，直接把它补进 OBSharp.Interop 库条目的 runtimeTargets：
+      runtimes/<rid>/native/OBSharp.Interop.Native.dll          （Windows）
+      runtimes/<rid>/native/libOBSharp.Interop.Native.so|dylib  （其它）
+    只改 deps.json，不复制文件；文件由原生构建 / 打包放进 runtimes/<rid>/native/。
+  -->
+  <UsingTask TaskName="ObSharpAddNativeToDepsFile"
+             TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <DepsFile ParameterType="System.String" Required="true" />
+      <LibraryName ParameterType="System.String" Required="true" />
+      <NativeName ParameterType="System.String" Required="true" />
+      <RuntimeIdentifiers ParameterType="System.String[]" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Text" />
+      <Using Namespace="System.Text.RegularExpressions" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+if (!File.Exists(DepsFile)) return true;
+
+var text = File.ReadAllText(DepsFile);
+
+// targets 下的库条目以 "runtime" / "dependencies" 开头；libraries 下的以 "type" 开头，不会匹配。
+var entry = new Regex("(\"" + Regex.Escape(LibraryName) + "/[^\"]+\"\\s*:\\s*\\{)([ \\t]*\\r?\\n)([ \\t]*)(?=\"(?:runtime|dependencies)\")");
+
+var builder = new StringBuilder();
+foreach (var rid in RuntimeIdentifiers)
+{
+    var windows = rid.StartsWith("win", StringComparison.Ordinal);
+    var extension = windows ? ".dll" : rid.StartsWith("osx", StringComparison.Ordinal) ? ".dylib" : ".so";
+    var path = "runtimes/" + rid + "/native/" + (windows ? "" : "lib") + NativeName + extension;
+    if (text.Contains("\"" + path + "\"")) continue;
+    if (builder.Length > 0) builder.Append(",");
+    builder.Append("\n__I__\"" + path + "\": {\n__I____I__\"rid\": \"" + rid + "\",\n__I____I__\"assetType\": \"native\",\n__I____I__\"fileVersion\": \"0.0.0.0\"\n__I__}");
+}
+if (builder.Length == 0) return true;
+
+var updated = entry.Replace(text, match =>
+{
+    var indent = match.Groups[3].Value;
+    var block = builder.ToString().Replace("__I__", "  ").Replace("\n", "\n" + indent);
+    return match.Groups[1].Value + match.Groups[2].Value + indent + "\"runtimeTargets\": {" + block + "\n" + indent + "},\n" + indent;
+});
+
+if (updated != text) File.WriteAllText(DepsFile, updated, new UTF8Encoding(false));
+]]></Code>
+    </Task>
+  </UsingTask>
+
+  <ItemGroup>
+    <_ObSharpNativeRid Include="win-x64;win-arm64;linux-x64;linux-arm64;osx-x64;osx-arm64" />
+  </ItemGroup>
+
+  <Target Name="_AddObSharpNativeToBuildDepsFile"
+          AfterTargets="GenerateBuildDependencyFile"
+          Condition="'$(GenerateDependencyFile)' == 'true'">
+    <ObSharpAddNativeToDepsFile DepsFile="$(ProjectDepsFilePath)"
+                                LibraryName="OBSharp.Interop"
+                                NativeName="OBSharp.Interop.Native"
+                                RuntimeIdentifiers="@(_ObSharpNativeRid)" />
+  </Target>
+
+  <Target Name="_AddObSharpNativeToPublishDepsFile"
+          AfterTargets="GeneratePublishDependencyFile"
+          Condition="'$(GenerateDependencyFile)' == 'true' and '$(IntermediateDepsFilePath)' != ''">
+    <ObSharpAddNativeToDepsFile DepsFile="$(IntermediateDepsFilePath)"
+                                LibraryName="OBSharp.Interop"
+                                NativeName="OBSharp.Interop.Native"
+                                RuntimeIdentifiers="@(_ObSharpNativeRid)" />
+  </Target>
+</Project>
