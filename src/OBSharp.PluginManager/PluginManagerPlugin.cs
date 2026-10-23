@@ -9,25 +9,6 @@ namespace OBSharp.PluginManager;
 /// OB# 的插件管理器：把宿主的插件管理 API（OBSharp.Runtime 的 internal 成员）做成一个
 /// 页面，同时挂成 OBS 的停靠面板和「工具」菜单里的一项。
 /// </summary>
-/// <remarks>
-/// <para>
-/// 职责划分（SDK 不发明窗口体系，三件事分开）：
-/// </para>
-/// <list type="bullet">
-/// <item><b>浏览器</b>：<see cref="ObsBrowser"/>，一块页面，不知道自己要挂到哪。</item>
-/// <item><b>工具菜单</b>：<see cref="ObsHost.AddToolsMenuItem"/>，只加菜单项；窗口在
-/// <b>点击回调里才创建</b>，关掉就销毁。这是本插件唯一的入口。</item>
-/// </list>
-/// <para>
-/// 入口只有一个：OBS 的「工具」菜单。**没有**停靠面板 —— 实测 OBS 关闭 dock 后
-/// 重新显示时，CEF 的 OSR 不再出帧、页面也停了（详见 <see cref="Load"/> 里的说明）。
-/// </para>
-/// <para>
-/// 这个类里<b>没有</b> <c>Task.Run</c>：等 CEF 的活儿由 SDK 的
-/// <see cref="ObsWindow.CreateAsync"/> / <see cref="ObsBrowser.CreateAsync"/> 负责，
-/// 这里只管 await。
-/// </para>
-/// </remarks>
 public sealed class PluginManagerPlugin : ObsPlugin
 {
     private const string HostName = "plugin-manager";
@@ -44,6 +25,9 @@ public sealed class PluginManagerPlugin : ObsPlugin
     {
         _builder = CreateBuilder(HostName);
         _builder.Services.AddSingleton(serviceProvider.GetRequiredService<OBSharpPluginManager>());
+
+        // 插件自己的配置节（appsettings.json 的 PluginManager 节），IOptions 注入。
+        _builder.Services.AddOptions<PluginManagerOptions>().BindConfiguration("PluginManager");
 
         // 交互式服务器渲染 + 跨组件的状态
         _builder.Services.AddRazorComponents().AddInteractiveServerComponents();

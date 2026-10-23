@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Options;
+
 using OBSharp.Interop.UI;
 
 namespace OBSharp.PluginManager;
@@ -5,11 +7,14 @@ namespace OBSharp.PluginManager;
 public sealed partial class PluginManagerWindow : Window
 {
     private readonly ILogger<PluginManagerWindow> _logger;
+    private readonly bool _devTools;
     private WebView _webView;
 
-    public PluginManagerWindow(ILogger<PluginManagerWindow> logger) : base(GetOptions(), logger)
+    public PluginManagerWindow(ILogger<PluginManagerWindow> logger, IOptions<PluginManagerOptions> options)
+        : base(GetOptions(), logger)
     {
         _logger = logger;
+        _devTools = options.Value.DevTools;
         _webView = CreateWebView();
         SetContent(_webView.Widget);
         CloseRequested += OnClosing;
@@ -33,6 +38,7 @@ public sealed partial class PluginManagerWindow : Window
         new()
         {
             Host = "plugin-manager",
+            DevTools = _devTools,
         }, _logger);
 
     public override int Show()

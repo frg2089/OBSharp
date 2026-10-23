@@ -129,6 +129,11 @@ public partial class WebView : IDisposable
                 if (!string.IsNullOrEmpty(startupScript))
                     AbiApi.CefWidget(widget).SetStartupScript(startupScript);
 
+                // 调试：请求自动弹 DevTools（原生侧带重试，等 obs-browser 的 Init 队列
+                // 把浏览器建好就弹；布局探针不通过就安静放弃，不影响正常功能）。
+                if (options.DevTools)
+                    AbiApi.CefWidget(widget).ShowDevTools(config.Url);
+
                 LogWidgetCreated(Logger, config.Url);
             });
         }

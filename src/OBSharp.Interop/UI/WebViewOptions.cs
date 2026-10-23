@@ -86,4 +86,10 @@ public sealed class WebViewOptions
     /// </para>
     /// </remarks>
     public string? Host { get; init; }
+
+    /// <summary>
+    /// 浏览器就绪后立刻自动弹 DevTools（调试用，与右键菜单「检查」同一条 CEF 通路）。
+    /// 是否打开由调用方决定（通常是上层从配置读了再传进来，本层不碰配置 / 环境变量）。
+    /// </summary>
+    public bool DevTools { get; init; }
 }
