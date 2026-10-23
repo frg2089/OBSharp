@@ -167,18 +167,36 @@ public static partial class OBSModule
             surfix = ".dylib";
         }
 
-        var libpath = Path.Combine(AppContext.BaseDirectory, "runtimes", RuntimeInformation.RuntimeIdentifier, "native", $"{prefix}{libraryName}{surfix}");
-        if (!File.Exists(libpath))
-            libpath = Path.Combine(AppContext.BaseDirectory, "runtimes", RuntimeInformation.RuntimeIdentifier, "native", $"{libraryName}{surfix}");
-        if (!File.Exists(libpath))
-            libpath = Path.Combine(AppContext.BaseDirectory, $"{prefix}{libraryName}{surfix}");
-        if (!File.Exists(libpath))
-            libpath = Path.Combine(AppContext.BaseDirectory, $"{libraryName}{surfix}");
+        // 被 hostfxr 以「组件」方式加载时，AppContext.BaseDirectory 不是托管程序集所在的 any/ 目录，
+        // 所以以程序集自身位置为准；RuntimeInformation.RuntimeIdentifier 是运行时的构建 RID，
+        // 也不一定等于 runtimes/ 下的目录名，这里按系统 + 架构显式拼。
+        var os = OperatingSystem.IsWindows() ? "win" : OperatingSystem.IsMacOS() ? "osx" : "linux";
+        var arch = RuntimeInformation.ProcessArchitecture switch
+        {
+            Architecture.X64 => "x64",
+            Architecture.Arm64 => "arm64",
+            Architecture.X86 => "x86",
+            var other => other.ToString().ToLowerInvariant(),
+        };
+        var rid = $"{os}-{arch}";
 
-        if (File.Exists(libpath))
-            return NativeLibrary.Load(libpath);
+        var libraries = new[]
+        {
+            Path.GetDirectoryName(typeof(OBSModule).Assembly.Location),
+            Path.GetDirectoryName(assembly.Location),
+            AppContext.BaseDirectory,
+        }
+        .Distinct()
+        .OfType<string>()
+        .SelectMany(i => new[] { i, Path.Combine(i, "runtimes", rid, "native") }.Distinct())
+        .SelectMany(i => new[] { Path.Combine(i, $"{prefix}{libraryName}{surfix}"), Path.Combine(i, $"{libraryName}{surfix}") }.Distinct());
+
+        foreach (var library in libraries)
+        {
+            if (File.Exists(library) && NativeLibrary.TryLoad(library, out var handle))
+                return handle;
+        }
 
         return 0;
-
     }
 }
