@@ -12,6 +12,13 @@ concurrency:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: pwsh
+
+env:
+  DOTNET_TARGET_FRAMEWORK: net11.0
+
 jobs:
   dotnet:
     name: .NET
@@ -103,8 +110,7 @@ jobs:
       - name: 生成 Interop 绑定
         # 与本地同一条生成逻辑：调 Build-DevDist.ps1 的绑定生成步骤（-GeneratorOnly
         # 只跑到生成就结束），命令不在此复制第二份；生成器随用随编（dotnet run）。
-        shell: pwsh
-        run: ./scripts/Build-DevDist.ps1 -GeneratorOnly -Configuration Release -Framework net11.0
+        run: ./scripts/Build-DevDist.ps1 -GeneratorOnly -Configuration Release -Framework ${{ env.DOTNET_TARGET_FRAMEWORK }}
 
       # 下面的编译 / 发布链与 scripts/Build-DevDist.ps1 的⑤保持一致：解决方案两套 TFM
       # 一起编，发布时各按各的 TFM。
@@ -112,23 +118,23 @@ jobs:
         run: dotnet build --graph --artifacts-path artifacts --configuration Release --no-restore
 
       - name: 发布 Runtime
-        run: dotnet publish src/OBSharp.Runtime --graph --artifacts-path artifacts --configuration Release --framework net11.0 --no-restore
+        run: dotnet publish src/OBSharp.Runtime --graph --artifacts-path artifacts --configuration Release --framework ${{ env.DOTNET_TARGET_FRAMEWORK }} --no-restore
 
       - name: 发布 PluginManager
-        run: dotnet publish src/OBSharp.PluginManager --graph --artifacts-path artifacts --configuration Release --framework net11.0 --no-restore
+        run: dotnet publish src/OBSharp.PluginManager --graph --artifacts-path artifacts --configuration Release --framework ${{ env.DOTNET_TARGET_FRAMEWORK }} --no-restore
 
       - name: 上传托管程序集
         uses: actions/upload-artifact@v7
         with:
           name: assemblies
-          path: artifacts/publish/OBSharp.Runtime/release_net11.0/
+          path: artifacts/publish/OBSharp.Runtime/release_${{ env.DOTNET_TARGET_FRAMEWORK }}/
           if-no-files-found: error
 
       - name: 上传 PluginManager 托管程序集
         uses: actions/upload-artifact@v7
         with:
           name: pluginmanager-assemblies
-          path: artifacts/publish/OBSharp.PluginManager/release_net11.0/
+          path: artifacts/publish/OBSharp.PluginManager/release_${{ env.DOTNET_TARGET_FRAMEWORK }}/
           if-no-files-found: error
 
       - name: 上传构建缓存
@@ -146,9 +152,6 @@ jobs:
     name: Native (${{ matrix.rid }})
     needs: dotnet
     runs-on: ${{ matrix.runs-on }}
-    defaults:
-      run:
-        shell: pwsh
     strategy:
       fail-fast: false
       matrix:
@@ -225,14 +228,11 @@ jobs:
       - name: 编译 Native 项目
         run: cmake --build --preset ${{ matrix.rid }}-release
 
-      - name: 还原 Loader 项目
-        run: dotnet restore src/OBSharp.Loader --runtime ${{ matrix.rid }} --graph --artifacts-path artifacts
-
       - name: 编译 Loader 项目
-        run: dotnet build src/OBSharp.Loader --runtime ${{ matrix.rid }} --graph --artifacts-path artifacts --configuration Release --framework net11.0 --no-restore
+        run: dotnet build src/OBSharp.Loader --graph --artifacts-path artifacts --configuration Release --framework ${{ env.DOTNET_TARGET_FRAMEWORK }} --no-restore
 
       - name: 以 NativeAOT 发布 Loader
-        run: dotnet publish src/OBSharp.Loader --runtime ${{ matrix.rid }} --graph --artifacts-path artifacts --configuration Release --framework net11.0 --no-restore --no-build
+        run: dotnet publish src/OBSharp.Loader --graph --artifacts-path artifacts --configuration Release --framework ${{ env.DOTNET_TARGET_FRAMEWORK }} --no-restore --no-build
 
       - name: 上传 Native 库
         uses: actions/upload-artifact@v7
@@ -245,7 +245,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: OBSharp.Loader-${{ matrix.rid }}
-          path: artifacts/publish/OBSharp.Loader/release_net11.0_${{ matrix.rid }}/
+          path: artifacts/publish/OBSharp.Loader/release_${{ env.DOTNET_TARGET_FRAMEWORK }}_${{ matrix.rid }}/
           if-no-files-found: error
 
   runtime:
@@ -366,7 +366,6 @@ jobs:
           path: out/${{ matrix.loader }}
 
       - name: 复制 data
-        shell: pwsh
         run: |-
           $source = "src/OBSharp.Runtime/Data/*"
           $destination = New-Item -ItemType Directory -Force -Path "out/${{ matrix.data }}"
@@ -374,7 +373,6 @@ jobs:
 
       - name: 创建 macOS 插件包 Info.plist
         if: ${{ startsWith(matrix.rid, 'osx-') }}
-        shell: pwsh
         run: |-
           @'
           <?xml version="1.0" encoding="UTF-8"?>
