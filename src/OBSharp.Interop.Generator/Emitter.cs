@@ -47,6 +47,8 @@ internal sealed class Emitter
         foreach (var handle in _model.Handles.Values)
         {
             _classes[handle.Name] = new ClassModel { Name = handle.Name, IsHandle = true };
+            // Null 哨兵属性占名：撞名的生成方法（如 obsharp_xxx_null）改名 Null2
+            _classes[handle.Name].UsedNames.Add("Null");
         }
 
         foreach (var handle in _model.Handles.Values)
@@ -310,6 +312,8 @@ internal sealed class Emitter
                     }
 
                 default:
+                    // 句柄参数：公开面 X? 可空，转发给 raw 时 ?? Xxx.Null 哨兵兜底——
+                    // raw 层非空（SafeHandle 封送器不接受 null）。
                     publicParams.Add($"{PublicParamType(param.Type)} {id}");
                     rawParams.Add($"{RawParamType(param.Type)} {id}");
                     callArgs.Add(param.Type.Kind switch
@@ -317,6 +321,7 @@ internal sealed class Emitter
                         TypeKind.OutScalar => $"out {id}",
                         TypeKind.RefPtr or TypeKind.DelegatePtr => $"ref {id}",
                         TypeKind.StructPtr when param.Type.Pointee?.IsConst is false => $"ref {id}",
+                        TypeKind.Handle => $"{id} ?? {param.Type.DeclName}.Null",
                         _ => id,
                     });
                     break;
@@ -641,6 +646,15 @@ internal sealed class Emitter
         sb.AppendLine($"    internal {name}(nint ptr, bool ownsHandle) {ctorBody}");
         sb.AppendLine();
 
+        // Null 哨兵：可选句柄参数的「无句柄」。就是包装 0 的借用句柄，封送成原生 NULL。
+        // 派生类各有一份（类型要匹配），用 new 隐藏基类的同名属性。
+        var nullHide = classModel.BaseName is not null ? "new " : string.Empty;
+        sb.AppendLine("    /// <summary>");
+        sb.AppendLine("    /// 空句柄（原生 NULL）。可选句柄参数用它表示「无」。");
+        sb.AppendLine("    /// </summary>");
+        sb.AppendLine($"    public static {nullHide}{name} Null => field ??= new(0, false);");
+        sb.AppendLine();
+
         if (classModel.IsRoot)
         {
             sb.AppendLine("    public override bool IsInvalid => handle is 0;");
@@ -920,7 +934,9 @@ internal sealed class Emitter
         TypeKind.Bool => "[MarshalAs(UnmanagedType.U1)] bool",
         TypeKind.String => "[MarshalAs(UnmanagedType.LPUTF8Str)] string?",
         TypeKind.VoidPtr => "nint",
-        TypeKind.Handle => type.DeclName + "?",
+        // 句柄参数在 raw 层一律非空：SafeHandle 封送器（SafeHandleMarshaller.FromManaged）
+        // 不接受 null（会 NRE）。可空语义由薄层的 Null 哨兵 + ?? 兜底，翻成原生 NULL。
+        TypeKind.Handle => type.DeclName!,
         TypeKind.StructPtr => (type.Pointee?.IsConst is false ? "ref " : "in ") + CsName(type.DeclName!),
         TypeKind.Enum => EnumRef(type),
         TypeKind.Delegate => type.DeclName + "?",
@@ -939,6 +955,8 @@ internal sealed class Emitter
         TypeKind.Bool => "bool",
         TypeKind.String => "string?",
         TypeKind.VoidPtr => "nint",
+        // 公开面可空（调用方直接传 null 表示「无句柄」），薄层转发时 ?? Xxx.Null 哨兵
+        // 翻成原生 NULL——raw 层非空，SafeHandle 封送器不接受 null。
         TypeKind.Handle => type.DeclName + "?",
         TypeKind.StructPtr => (type.Pointee?.IsConst is false ? "ref " : "in ") + CsName(type.DeclName!),
         TypeKind.Enum => EnumRef(type),

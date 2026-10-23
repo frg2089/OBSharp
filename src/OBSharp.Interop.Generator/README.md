@@ -50,10 +50,15 @@ public unsafe partial class QWidget : QObject
     internal QWidget(nint ptr, bool ownsHandle) : base(ptr, ownsHandle) { }
 
     /// <summary>
+    /// 空句柄（原生 NULL）。可选句柄参数用它表示「无」。
+    /// </summary>
+    public static QWidget Null => field ??= new(0, false);
+
+    /// <summary>
     /// C ABI: <c>obsharp_widget_create</c>
     /// </summary>
     public static QWidget Create(QWidget? parent)
-        => new(obsharp_widget_create(parent), true); // 拥有句柄：Dispose 时释放
+        => new(obsharp_widget_create(parent ?? QWidget.Null), true); // 拥有句柄：Dispose 时释放
 
     public void SetWindowTitle(string? title)
         => obsharp_widget_set_window_title(this, title);
@@ -66,7 +71,7 @@ public unsafe partial class QWidget : QObject
 
     [LibraryImport("OBSharp.Interop.Native", EntryPoint = "obsharp_widget_create")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static partial nint obsharp_widget_create(QWidget? parent);
+    private static partial nint obsharp_widget_create(QWidget parent);
     ...
 }
 ```
@@ -74,7 +79,10 @@ public unsafe partial class QWidget : QObject
 - 方法参数名是 camelCase（`Create(QWidget? parent)`）；结构体字段是 Pascal（`RequestHeader.Name`）
 - 原始 `LibraryImport` 是类内 `private static partial`，公开面只有薄方法
 - 返回指针一律 raw 回 `nint`、薄层 `new` 包装（SafeHandle 不能当返回值封送）
-- 参数直接用 SafeHandle 类型（source-gen 调用期间自动加引用）
+- 参数直接用 SafeHandle 类型（source-gen 调用期间自动加引用）。**raw 层句柄参数一律非空**——
+  SafeHandle 封送器（`SafeHandleMarshaller.FromManaged`）不接受 null（会 NRE）；公开面照旧
+  `X?` 可空，薄层转发时 `?? Xxx.Null` 哨兵兜底（`public static Xxx Null => field ??= new(0, false);`，
+  封送成 0 即原生 NULL）
 - 句柄类按 C++ 继承关系生成（`QCefWidget : QWidget`、`QFileDialog : QWidget`、
   `QWidget : QObject`），`Create(QWidget? parent)` 才能传派生类型
 - **相等性**：继承链根类重写 `Equals`/`GetHashCode`/`==`/`!=`，按 handle 指针判等
